@@ -194,6 +194,12 @@ To grant roles to the distributor account on Sepolia:
 ```bash
 npm --prefix backend run hardhat run --network sepolia scripts/grant-roles.ts
 ```
+One click contract address update and maufacturer to default depoloyer account
+
+```bash
+npx hardhat run scripts/deploy-and-sync-env.ts --network sepolia
+```
+
 
 ---
 
