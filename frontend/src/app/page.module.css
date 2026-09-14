@@ -487,7 +487,7 @@
 .tableHead,
 .tableRow {
   display: grid;
-  grid-template-columns: 1fr 1.2fr 0.7fr 0.9fr 0.8fr;
+  grid-template-columns: 56px minmax(0, 1.5fr) 0.7fr 0.9fr 0.8fr;
   gap: 12px;
   align-items: center;
   padding: 10px 12px;
@@ -495,7 +495,7 @@
 
 .featurePanelAccent .tableHead,
 .featurePanelAccent .tableRow {
-  grid-template-columns: 0.7fr minmax(0, 1.5fr) minmax(96px, 0.95fr) minmax(150px, 1.15fr) 24px;
+  grid-template-columns: 56px minmax(0, 1.8fr) minmax(96px, 1fr) minmax(150px, 1.2fr) 24px;
 }
 
 .tableHead {
@@ -545,7 +545,7 @@ color: #334155 !important;
 
 .inventoryOverviewPanel .tableHead,
 .inventoryOverviewPanel .tableRow {
-  grid-template-columns: 0.72fr 1.25fr 0.58fr 0.82fr 0.95fr;
+  grid-template-columns: 56px minmax(0, 1.6fr) 0.6fr 0.85fr 1fr;
   gap: 8px;
   padding-left: 10px;
   padding-right: 10px;
@@ -562,7 +562,7 @@ color: #334155 !important;
 }
 
 .createdMedicineGroup > .tableRow {
-  grid-template-columns: 0.7fr minmax(0, 1.5fr) minmax(96px, 0.95fr) minmax(150px, 1.15fr) 24px;
+  grid-template-columns: 56px minmax(0, 1.8fr) minmax(96px, 1fr) minmax(150px, 1.2fr) 24px;
   width: 100%;
   border: 0;
   text-align: left;
@@ -592,7 +592,7 @@ color: #334155 !important;
 
 .partitionRow {
   display: grid;
-  grid-template-columns: 1fr 0.8fr 1.2fr auto;
+  grid-template-columns: 56px 0.8fr 1.2fr auto;
   gap: 10px;
   align-items: center;
   width: 100%;
@@ -737,7 +737,7 @@ color: #334155 !important;
 
 .inventoryPartitionRow {
   display: grid;
-  grid-template-columns: 1fr 0.8fr 1.2fr auto;
+  grid-template-columns: 56px 0.8fr 1.2fr auto;
   align-items: center;
   gap: 10px;
   width: 100%;
@@ -1045,7 +1045,7 @@ color: #334155 !important;
 
 .stockButton {
   display: grid;
-  grid-template-columns: 0.6fr 1.5fr 0.6fr;
+  grid-template-columns: 1.4fr 1fr 0.8fr;
   width: 100%;
   text-align: left;
   background: rgba(255, 255, 255, 0.6);
@@ -1209,13 +1209,13 @@ color: #334155 !important;
 
   .inventoryOverviewPanel .tableHead,
   .inventoryOverviewPanel .tableRow {
-    grid-template-columns: 0.72fr 1.25fr 0.58fr 0.82fr 0.95fr;
+    grid-template-columns: 56px minmax(0, 1.6fr) 0.6fr 0.85fr 1fr;
   }
 
   .featurePanelAccent .tableHead,
   .featurePanelAccent .tableRow,
   .createdMedicineGroup > .tableRow {
-    grid-template-columns: 0.7fr minmax(0, 1.5fr) minmax(96px, 0.95fr) minmax(150px, 1.15fr) 24px;
+    grid-template-columns: 56px minmax(0, 1.8fr) minmax(96px, 1fr) minmax(150px, 1.2fr) 24px;
   }
 }
 
