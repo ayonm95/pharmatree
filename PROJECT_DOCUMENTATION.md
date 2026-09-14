@@ -17,20 +17,19 @@ current owner, pending receiver, status, quantity, and metadata.
 
 ## 2. Repository structure
 
-This is a single root project. There are no separate `frontend/` or `backend/`
-directories.
+This repository is structured as an enterprise monorepo containing distinct `backend/` and `frontend/` workspaces:
 
 | Path | Responsibility |
 | --- | --- |
-| `contracts/PharmaTree.sol` | Roles, hierarchy, ownership, transfers, and sale |
-| `scripts/` | Local/Sepolia deployment and verification workflows |
-| `test/PharmaTree.test.ts` | Hardhat contract regression tests |
-| `src/app/` | Next.js routes |
-| `src/app/verify/page.tsx` | Public medicine provenance verification & QR audit trail |
-| `src/components/PharmaWalletView.tsx` | Main dashboard and wallet workflows |
-| `src/lib/pharmaTree.ts` | Frontend ABI, address, levels, and statuses |
-| `src/lib/ipfs.ts` | Medicine metadata formatting helper |
-| `public/` | Static frontend assets |
+| `backend/contracts/PharmaTree.sol` | Smart contract logic: RBAC, hierarchy, ownership, transfers, partitioning, rejections, and sales |
+| `backend/scripts/` | Sepolia and local Hardhat deployment, role granting, and verification workflows |
+| `backend/test/PharmaTree.test.ts` | Complete Chai/Mocha smart contract unit test suite (21 test cases passing) |
+| `frontend/src/app/` | Next.js 16 App Router pages (`/`, `/create`, `/admin`, `/transfers`, `/inventory`, `/verify`) |
+| `frontend/src/app/verify/page.tsx` | Public medicine provenance verification & QR audit trail |
+| `frontend/src/components/PharmaWalletView.tsx` | Comprehensive reactive wallet dashboard, inventory partitions, rejection UI, and transfer controls |
+| `frontend/src/lib/rpc.ts` | Resilient multi-endpoint FallbackProvider with exponential backoff & rate-limit recovery |
+| `frontend/src/lib/pharmaTree.ts` | Frontend ABI, contract addresses, levels, and status mappings |
+| `frontend/src/lib/ipfs.ts` | Medicine metadata formatting helper |
 
 ## 3. Architecture
 
@@ -39,14 +38,15 @@ directories.
 ```mermaid
 flowchart LR
     U[Manufacturer / Handler / Admin] --> MM[MetaMask]
-    MM --> UI[Next.js dashboard]
-    UI -->|Read-only JSON-RPC| RPC[Hardhat node or Sepolia]
-    UI -->|Signed transactions| RPC
-    RPC --> C[PharmaTree.sol]
-    C --> S[On-chain unit state]
-    C --> E[Transfer and sale events]
-    UI --> H[Activity and inventory views]
-    UI --> M[Metadata formatter]
+    MM --> UI[Next.js 16 Dashboard]
+    UI -->|Resilient Fallback Reads| RPC[Multi-Endpoint RPC Pool]
+    UI -->|Signed Transactions| MM
+    MM -->|Submit Tx| RPC
+    RPC --> C[PharmaTree.sol (0x2bAE...044)]
+    C --> S[On-chain Unit State & Partitions]
+    C --> E[Immutable Audit Events]
+    UI --> H[Activity & Inventory Partitions]
+    UI --> M[Metadata Formatter]
     M --> C
 ```
 
@@ -54,33 +54,19 @@ flowchart LR
 
 ```mermaid
 flowchart TB
-    Routes[Next.js routes] --> Wallet[PharmaWalletView]
-    Wallet --> Provider[ethers read-only provider]
-    Wallet --> Signer[MetaMask signer]
-    Wallet --> ABI[ABI and enum mappings]
-    Wallet --> Metadata[Metadata helper]
-    Provider --> Contract[PharmaTree.sol]
+    Routes[Next.js App Router] --> Wallet[PharmaWalletView]
+    Wallet --> Provider[Multi-Endpoint FallbackProvider (rpc.ts)]
+    Wallet --> Signer[MetaMask Signer]
+    Wallet --> ABI[ABI & Enum Mappings]
+    Wallet --> Metadata[Metadata Helper]
+    Provider --> Contract[PharmaTree.sol (0x2bAE...044)]
     Signer --> Contract
-    Contract --> Roles[Roles]
-    Contract --> Units[Hierarchy and quantities]
-    Contract --> Events[Immutable events]
+    Contract --> Roles[Access Control Matrix]
+    Contract --> Units[Lineage & Stock Partitions]
+    Contract --> Events[Immutable Audit Events]
 ```
 
-```text
-MetaMask
-   |
-Next.js dashboard (ethers.js)
-   | read-only JSON-RPC / signed transactions
-Hardhat local node or Sepolia
-   |
-PharmaTree.sol
-   |
-On-chain unit state and immutable events
-```
-
-The frontend uses a read-only JSON-RPC provider to load units and event
-timestamps. MetaMask supplies the signer for state-changing operations. The
-contract remains the authority for roles, ownership, quantity, and status.
+The frontend uses a resilient multi-endpoint JSON-RPC fallback provider (`rpc.ts`) that distributes read requests across high-availability Sepolia nodes (Tenderly, PublicNode, 1RPC, Sepolia.org) with automatic backoff on HTTP 429 rate limits. MetaMask supplies the signer for state-changing operations. The smart contract remains the single source of truth for roles, ownership, hierarchy, and status.
 
 ## 4. Smart-contract model
 
@@ -177,17 +163,27 @@ sequenceDiagram
     UI->>UI: Refresh inventory and lineage
 ```
 
-### Transfer rejection workflow
+### Transfer rejection & stock restoration workflow
 
 ```mermaid
-flowchart LR
-    Owner[Current owner] --> Start[Initiate transfer]
-    Start --> Pending[PendingTransfer]
-    Pending --> Receiver{Pending receiver}
-    Receiver -->|Accept| Active[Active under new owner]
-    Receiver -->|Reject| Rejected[Rejected]
-    Rejected --> Review[Review and initiate a valid transfer]
+flowchart TD
+    Owner[Sender / Manufacturer] -->|initiatePartialTransfer| Pending[Status: PendingTransfer]
+    Pending --> Receiver{Pending Receiver}
+    Receiver -->|acceptTransfer| Active[Status: Active under Receiver]
+    Receiver -->|rejectTransfer| Rejected[Status: Rejected]
+    Rejected --> ClearPending[Clear pendingReceiver to address 0]
+    ClearPending --> KeepOwner[Ownership retained by Sender]
+    KeepOwner --> Restock[Quantity automatically restored to Sender In-Stock count]
+    Restock --> AuditTrail[Emit TransferRejected: indexed from, indexed rejectedBy]
 ```
+
+1. **Cryptographic Protection**: Only the designated `pendingReceiver` can call `rejectTransfer(unitId)`.
+2. **Immediate Custody Restitution**: On rejection, `pendingReceiver` is reset to `address(0)`, while `currentOwner` remains with the sender, preventing inventory loss.
+3. **Automated Stock Restoration**: In the manufacturer/sender inventory, rejected partition quantities are automatically factored back into available inventory (`currentQuantity = activeUnits + rejectedReturnedUnits`), preventing false stock deficits.
+4. **Transparent Two-Way UI Attribution**:
+   - **For Rejecter Account**: Recent Activity displays a red `Rejected by You` badge, unit quantity, sender address, and rejection timestamp.
+   - **For Sender Account**: Inventory partition row displays `Rejected by 0x...` directly on the tile button, status `Returned to sender`, and audit log `Transfer Rejected: 0x... ➔ Rejected by 0x...`.
+   - **Public / Overview View**: Partition rows display `Rejected by 0x...` with exact retained quantities.
 
 ### QR Code Verification & Public Provenance (/verify)
 
@@ -272,11 +268,12 @@ view mode:
 
 | Route | Purpose |
 | --- | --- |
-| `/` | Overview, status summaries, and recent activity |
-| `/create` | Create root medicine units |
-| `/admin` | Grant manufacturer and handler roles |
+| `/` | Overview, status summaries, reactive stock charts, and recent activity |
+| `/create` | Create root medicine units (Authorized Manufacturers only) |
+| `/admin` | Grant manufacturer and handler roles (Admin only) |
 | `/transfers` | Initiate, accept, reject, and review transfers |
-| `/inventory` | View owned stock, lineage, quantity, and status |
+| `/inventory` | View owned stock, lineage, partitions, quantity, and rejection status |
+| `/verify` | Public consumer provenance verification and QR code audit trail |
 
 The dashboard distinguishes manufacturer-created medicines from handler
 inventory. Manufacturer tables preserve creation and lineage context; handler
@@ -391,21 +388,16 @@ Manual dashboard checks:
 7. Try an unauthorized receiver and an over-quantity transfer.
 8. Sell active stock and confirm it cannot be transferred afterward.
 
-## 11. Known limitations
+## 11. Known limitations & future roadmap
 
-- `src/lib/ipfs.ts` formats metadata locally; production pinning requires
-  configuring a secure server-side Pinata/IPFS integration.
-- Unit reads currently iterate through the contract's unit counter. A subgraph,
-  indexed API, or pagination strategy would scale better for large deployments.
-- Contract addresses and network settings are supplied through environment
-  variables and must match the connected MetaMask network.
-- The current contract sale operation is whole-unit sale rather than a
-  partial-sale transaction.
+- `frontend/src/lib/ipfs.ts` formats metadata locally; production decentralized pinning can be integrated with server-side Pinata/IPFS API endpoints.
+- Unit reads iterate through the contract's unit counter with cached log enrichment. In enterprise high-volume settings, an indexing subgraph (The Graph) or indexed event cache would scale querying.
+- Contract addresses and network settings are supplied through environment variables and validated against the connected MetaMask network.
 
 ## 12. Security and public release
 
-- Keep all secrets in ignored local environment files.
-- Use placeholder values in committed templates.
+- Keep all secrets in ignored local environment files (`.env`, `.env.local`).
+- Use placeholder values in committed templates (`.env.example`, `.env.local.example`).
 - Do not expose private keys in scripts, screenshots, logs, issues, or commits.
 - Use a dedicated test wallet for local and Sepolia automation.
 - Rotate any credential that may have been exposed.
@@ -415,8 +407,9 @@ Manual dashboard checks:
 **Ayon Moitra**
 
 - GitHub: [@ayonm95](https://github.com/ayonm95)
-- Repository: [blockchain-pharmaceutical-tracking](https://github.com/ayonm95/blockchain-pharmaceutical-tracking)
-- Issues: [GitHub Issues](https://github.com/ayonm95/blockchain-pharmaceutical-tracking/issues)
+- Repositories:
+  - [Pharma (Monorepo)](https://github.com/ayonm95/Pharma)
+  - [pharmatree (Public Mirror)](https://github.com/ayonm95/pharmatree)
 - LinkedIn: [Ayon Moitra](https://www.linkedin.com/in/ayon-moitra/)
 
 This project is distributed under the [MIT License](./LICENSE).

@@ -1,63 +1,86 @@
-# Sample Hardhat 3 Project (`mocha` and `ethers`)
+# PharmaTree Smart Contracts & Backend
 
-This project showcases a Hardhat 3 project using `mocha` for tests and the `ethers` library for Ethereum interactions.
+The smart contract foundation of the **PharmaTree** decentralized pharmaceutical tracking network. Built with **Solidity 0.8.20**, **Hardhat**, and **Ethers.js v6**.
 
-To learn more about Hardhat 3, please visit the [Getting Started guide](https://hardhat.org/docs/getting-started#getting-started-with-hardhat-3). To share your feedback, join our [Hardhat 3](https://hardhat.org/hardhat3-telegram-group) Telegram group or [open an issue](https://github.com/NomicFoundation/hardhat/issues/new) in our GitHub issue tracker.
+---
 
-## Project Overview
+## 📍 Live Deployment (Ethereum Sepolia)
 
-This example project includes:
+| Parameter | Value |
+| :--- | :--- |
+| **Network** | Ethereum Sepolia Testnet |
+| **Chain ID** | `11155111` |
+| **Contract Address** | [`0x2bAE15834463a657F68673135B8deCd39EF33044`](https://sepolia.etherscan.io/address/0x2bAE15834463a657F68673135B8deCd39EF33044) |
+| **Deployment Block** | `11683269` |
+| **Compiler Version** | `v0.8.20+commit.a1b79de6` |
 
-- A simple Hardhat configuration file.
-- Foundry-compatible Solidity unit tests.
-- TypeScript integration tests using `mocha` and ethers.js
-- Examples demonstrating how to connect to different types of networks, including locally simulating OP mainnet.
+---
 
-## Usage
+## 🏛️ Smart Contract Architecture (`contracts/PharmaTree.sol`)
 
-### Running Tests
+- **Role-Based Access Control (RBAC)**:
+  - `Admin`: Assigns and revokes `Manufacturer` and `Handler` authorizations.
+  - `Manufacturer`: Authorized to create root pharmaceutical units with cryptographic provenance.
+  - `Handler`: Authorized logistics and healthcare entities (Distributors, Wholesalers, Pharmacies) allowed to participate in custody handshakes.
+- **Hierarchical Packaging Lineage**:
+  `Container (0) ➔ Shipment (1) ➔ Batch (2) ➔ Box (3) ➔ IndividualItem (4)`
+- **Two-Party Handshake & Custody Transfer**:
+  - `initiateTransfer(unitId, receiver)`: Transfers full unit quantity to pending state.
+  - `initiatePartialTransfer(unitId, receiver, quantity)`: Splits available quantity, preserving sender remainder and minting a child unit with inherited parent/root lineage.
+  - `acceptTransfer(unitId)`: Authorized recipient accepts custody, transitioning state to `Active`.
+  - `rejectTransfer(unitId)`: Authorized recipient rejects inbound shipment, clearing pending receiver back to `address(0)` while retaining sender ownership and restoring available inventory.
+- **Dispensing & Sale Detachment**:
+  - `sellQuantity(unitId, quantity)`: Splits stock and marks partial dispensing on-chain with updated metadata.
+  - `markAsSold(unitId)`: Finalizes complete unit sale, permanently locking it against subsequent transfers.
 
-To run all the tests in the project, execute the following command:
+---
 
-```shell
-npx hardhat test
+## 🧪 Testing Suite (21 Test Cases)
+
+Run the Chai/Hardhat test suite:
+
+```bash
+npm test
 ```
 
-You can also selectively run the Solidity or `mocha` tests:
+All 21 comprehensive test scenarios validate:
+1. **Admin & Role Authorization**: Role assignment, admin initialization, and unauthorized access reverts.
+2. **Hierarchical Creation**: Root unit creation, parent/root lineage tracking, and permission checks.
+3. **Partial Transfers**: Sender remainder retention and child unit detachment.
+4. **Two-Party Handshake**: Mutual acceptance, unauthorized recipient prevention, and wrong-caller reverts.
+5. **Transfer Rejection**: Recipient rejection capability, state transition to `Status.Rejected (3)`, and custody retention.
+6. **Dispensing & Sale**: `sellQuantity` partial splitting, `markAsSold` complete sales, zero-quantity checks, and over-quantity reverts.
 
-```shell
-npx hardhat test solidity
-npx hardhat test mocha
-```
+---
 
-### Make a deployment to Sepolia
+## 🚀 Deployment & Management Scripts
 
-This project includes an example Ignition module to deploy the contract. You can deploy this module to a locally simulated chain or to Sepolia.
+```bash
+# Compile contracts
+npm run compile
 
-To run the deployment to a local chain:
+# Deploy to Sepolia testnet
+npm run deploy:sepolia
 
-```shell
-npx hardhat ignition deploy ignition/modules/Counter.ts
-```
+# Deploy a fresh manufacturer contract and sync environment files
+npm run deploy:fresh-manufacturer
 
-To run the deployment to Sepolia, you need an account with funds to send the transaction. The provided Hardhat configuration includes a Configuration Variable called `SEPOLIA_PRIVATE_KEY`, which you can use to set the private key of the account you want to use.
+# Run end-to-end Sepolia validation flow
+npm run verify:sepolia
 
-You can set the `SEPOLIA_PRIVATE_KEY` variable using the `hardhat-keystore` plugin or by setting it as an environment variable.
-
-To set the `SEPOLIA_PRIVATE_KEY` config variable using `hardhat-keystore`:
-
-```shell
-npx hardhat keystore set SEPOLIA_PRIVATE_KEY
-```
-
-After setting the variable, you can run the deployment with the Sepolia network:
-
-```shell
-npx hardhat ignition deploy --network sepolia ignition/modules/Counter.ts
-```
-npx hardhat run scripts/deploy-sepolia.ts --network sepolia
+# Grant roles to distributor / handler accounts
 npx hardhat run scripts/grant-roles.ts --network sepolia
-npx hardhat run scripts/create-medicine.ts --network sepolia
+```
 
+---
 
+## ⚙️ Environment Configuration (`backend/.env`)
 
+```env
+SEPOLIA_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
+SEPOLIA_PRIVATE_KEY_MANUFACTURER=0x...
+SEPOLIA_PRIVATE_KEY_DISTRIBUTOR=0x...
+SEPOLIA_CHAIN_ID=11155111
+ETHERSCAN_API_KEY=YOUR_ETHERSCAN_KEY
+SEPOLIA_CONTRACT_ADDRESS=0x2bAE15834463a657F68673135B8deCd39EF33044
+```

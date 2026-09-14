@@ -1,54 +1,59 @@
-# PharmaTree Frontend
+# PharmaTree Frontend Dashboard & Verification Portal
 
-A premium dashboard for the PharmaTree blockchain supply-chain system. It connects to the local Hardhat blockchain, reads contract state, and allows manufacturers and handlers to create medicine units, review inventory, and approve transfer workflows.
+A production-grade Web3 supply-chain management dashboard and public verification engine for **PharmaTree**. Built with **Next.js 16 (App Router)**, **React 19**, **Ethers.js v6**, and **Turbopack**.
 
-## Prerequisites
+---
 
-- Node.js 18+
-- A running local Hardhat network from the backend project
-- The deployed PharmaTree contract address
+## 🌟 Features
 
-## Local setup
+- **Automated MetaMask Detection & Role Adaptation**: Dynamically switches UI capabilities between **Admin**, **Manufacturer**, **Handler**, and **Consumer** based on active on-chain roles.
+- **Resilient Multi-Endpoint Fallback RPC (`rpc.ts`)**: Built-in RPC failover engine with automatic round-robin, exponential backoff, and recovery on HTTP 429 rate limits across public Sepolia nodes (Tenderly, PublicNode, 1RPC, Sepolia.org).
+- **Two-Way Rejection Flow & Stock Restoration**:
+  - **Rejecter Account**: Recent Activity tab displays **`Rejected by You`** badge, sender address, and rejection timestamp.
+  - **Sender Account**: Inventory tab directly tags rejected partitions with **`Rejected by 0x...`**, sets status to `Returned to sender`, and automatically restores the rejected quantity to active stock counts (`70/100 (30 active, 40 rejected returned)`).
+- **Public Provenance Verification Portal (`/verify`)**: Zero-wallet consumer verification engine. Scan a QR code or enter a Unit ID to inspect manufacturer credentials, container level, and the complete chronological custody audit trail.
+- **In-App QR Code Generator**: Downloadable and printable PNG QR codes for any medicine unit or batch directly from inventory tiles.
+- **Reactive Stock Charts & Lineage Tracking**: Visualizes batch partitions (`#1.1`, `#1.2`) with retained remainders and status badges.
 
-From this directory:
+---
 
-```bash
-cp .env.example .env.local
-npm install
-npm run dev
-```
+## 🧭 Routes & Pages
 
-Then open http://localhost:3000.
+| Route | View Mode | Description |
+| :--- | :--- | :--- |
+| `/` | `overview` | High-level stock metrics, reactive donut chart, quarterly tallies, and partition branches |
+| `/create` | `create` | Form for authorized manufacturers to mint root medicine units with packaging level and batch quantity |
+| `/admin` | `admin` | Cryptographic role granting panel for contract administrators |
+| `/transfers` | `transfers` | Custody handshake controls (Initiate, Accept, Reject, Dispense/Sell) and Recent Activity feed |
+| `/inventory` | `inventory` | Full medicine lineage view with expandable partition hierarchy and transfer history logs |
+| `/verify` | `verify` | Public consumer portal for verifying medicine authenticity and on-chain custody timelines |
 
-## Required environment variables
+---
+
+## ⚙️ Environment Configuration (`frontend/.env.local`)
 
 ```env
-NEXT_PUBLIC_RPC_URL=http://127.0.0.1:8545
-NEXT_PUBLIC_PHARMA_TREE_CONTRACT=0xF812804845BBA57ff5783A6A028745B681577d76
-NEXT_PUBLIC_PINATA_API_KEY=
-NEXT_PUBLIC_PINATA_SECRET_API_KEY=
+NEXT_PUBLIC_PHARMA_TREE_CONTRACT=0x2bAE15834463a657F68673135B8deCd39EF33044
+NEXT_PUBLIC_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
+NEXT_PUBLIC_CHAIN_ID=11155111
+NEXT_PUBLIC_DEPLOYMENT_BLOCK=11683269
 ```
 
-## Backend pairing
+---
 
-Start the contract node from the backend folder:
+## 🚀 Getting Started
+
+From the `frontend` directory:
 
 ```bash
-cd ../backend
-npx hardhat node
+# Install dependencies
+npm install
+
+# Start development server with Turbopack
+npm run dev
+
+# Build for production
+npm run build
 ```
 
-Deploy the contract:
-
-```bash
-cd ../backend
-npx hardhat run scripts/deploy.ts --network localhost
-```
-
-Then copy the deployed address into `NEXT_PUBLIC_PHARMA_TREE_CONTRACT` in `.env.local`.
-
-## Production notes
-
-- The app reads the deployed contract address from `NEXT_PUBLIC_PHARMA_TREE_CONTRACT`.
-- For live environments, set the correct RPC URL and deployed contract address in the host environment.
-- Pinata variables are prepared for future metadata/IPFS uploads and are not required for the current local dashboard flow.
+Open [http://localhost:3000](http://localhost:3000) in your browser.
