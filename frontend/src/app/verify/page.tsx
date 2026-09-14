@@ -92,7 +92,7 @@ function VerifyContent() {
         const events: TimelineEvent[] = [];
         try {
           const latestBlock = await provider.getBlockNumber();
-          const configuredStart = Number(process.env.NEXT_PUBLIC_DEPLOYMENT_BLOCK || "0");
+          const configuredStart = Number(process.env.NEXT_PUBLIC_DEPLOYMENT_BLOCK || "11683269");
           const fromBlock = configuredStart > 0 ? configuredStart : Math.max(0, latestBlock - 15000);
 
           const rawLogs = await provider.getLogs({

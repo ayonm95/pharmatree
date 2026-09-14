@@ -166,7 +166,7 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
       try {
         const activity: Record<string, UnitActivity> = {};
         const latestBlock = await withRpcRetry(() => readonlyProvider.getBlockNumber());
-        const configuredStart = Number(process.env.NEXT_PUBLIC_DEPLOYMENT_BLOCK || "0");
+        const configuredStart = Number(process.env.NEXT_PUBLIC_DEPLOYMENT_BLOCK || "11683269");
         const fromBlock = configuredStart > 0
           ? configuredStart
           : Math.max(0, latestBlock - DEFAULT_EVENT_LOOKBACK);

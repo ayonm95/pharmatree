@@ -23,7 +23,7 @@ export const PHARMA_TREE_ABI = [
   "event TransferRejected(uint256 indexed id, address indexed from, address indexed rejectedBy)",
   "event UnitSold(uint256 indexed id, address indexed soldBy)"
 ] as const;
-export const PHARMA_TREE_CONTRACT = process.env.NEXT_PUBLIC_PHARMA_TREE_CONTRACT || "0xF812804845BBA57ff5783A6A028745B681577d76";
+export const PHARMA_TREE_CONTRACT = process.env.NEXT_PUBLIC_PHARMA_TREE_CONTRACT || "0x2bAE15834463a657F68673135B8deCd39EF33044";
 export const PHARMA_TREE_CHAIN_ID = BigInt(process.env.NEXT_PUBLIC_CHAIN_ID || "11155111");
 
 export const UNIT_LEVELS = [
