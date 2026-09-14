@@ -10,6 +10,7 @@ import {
   unitLevelToName,
   unitStatusToName,
 } from "../../lib/pharmaTree";
+import { readonlyProvider } from "../../lib/rpc";
 
 type UnitRecord = {
   id: string;
@@ -63,10 +64,7 @@ function VerifyContent() {
       setTimeline([]);
 
       try {
-        const rpcUrl =
-          process.env.NEXT_PUBLIC_RPC_URL ||
-          "https://sepolia.infura.io/v3/ab602f75684b462da53b56b8e765e5a2";
-        const provider = new ethers.JsonRpcProvider(rpcUrl);
+        const provider = readonlyProvider;
         const contract = new ethers.Contract(PHARMA_TREE_CONTRACT, PHARMA_TREE_ABI, provider);
 
         const idBigInt = BigInt(activeUnitId);

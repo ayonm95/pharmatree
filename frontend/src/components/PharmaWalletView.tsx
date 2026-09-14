@@ -7,6 +7,7 @@ import { ethers } from "ethers";
 import QRCode from "qrcode";
 import styles from "@/app/page.module.css";
 import { PHARMA_TREE_ABI, PHARMA_TREE_CHAIN_ID, PHARMA_TREE_CONTRACT, unitLevelToName } from "@/lib/pharmaTree";
+import { readonlyProvider } from "@/lib/rpc";
 
 type ViewMode = "overview" | "transfers" | "inventory" | "create" | "admin";
 
@@ -62,11 +63,6 @@ const EVENT_QUERY_WINDOW = 9_000;
 const DEFAULT_EVENT_LOOKBACK = 10_000;
 const ACTIVITY_CACHE_TTL = 30_000;
 const RPC_RETRY_DELAYS = [250, 750, 1500];
-const readonlyProvider = new ethers.JsonRpcProvider(
-  process.env.NEXT_PUBLIC_RPC_URL || "https://sepolia.infura.io/v3/ab602f75684b462da53b56b8e765e5a2",
-  { chainId: 11155111, name: "sepolia" },
-  { staticNetwork: true }
-);
 let activityCache: { expiresAt: number; value: Record<string, UnitActivity> } | null = null;
 let activityRequest: Promise<Record<string, UnitActivity>> | null = null;
 
@@ -76,11 +72,20 @@ async function withRpcRetry<T>(operation: () => Promise<T>): Promise<T> {
       return await operation();
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
+      let errDetails = "";
+      try {
+        errDetails = JSON.stringify(error);
+      } catch {
+        // ignore cyclic
+      }
       const rateLimited =
         message.includes("Too Many Requests") ||
         message.includes("-32005") ||
         message.includes("429") ||
-        message.includes("rate limit");
+        message.includes("rate limit") ||
+        message.includes("missing response for request") ||
+        errDetails.includes("-32005") ||
+        errDetails.includes("Too Many Requests");
       if (!rateLimited || attempt >= RPC_RETRY_DELAYS.length) throw error;
       await new Promise((resolve) => window.setTimeout(resolve, RPC_RETRY_DELAYS[attempt]));
     }
