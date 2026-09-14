@@ -540,7 +540,9 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
       });
 
       const createdByUser = unitDetails.filter((unit) => unit.manufacturer.toLowerCase() === walletAddress.toLowerCase());
-      const ownedUnits = unitDetails.filter((unit) => unit.currentOwner.toLowerCase() === walletAddress.toLowerCase());
+      const ownedUnits = unitDetails.filter(
+        (unit) => unit.currentOwner.toLowerCase() === walletAddress.toLowerCase() && unit.status !== 2
+      );
       const pendingIncoming = unitDetails.filter(
         (unit) => unit.pendingReceiver.toLowerCase() === walletAddress.toLowerCase() && unit.status === 1
       );
@@ -1011,7 +1013,12 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
   }, [account, units]);
 
   const ownedUnits = useMemo(
-    () => units.filter((unit) => unit.currentOwner.toLowerCase() === account.toLowerCase()),
+    () =>
+      units.filter(
+        (unit) =>
+          unit.currentOwner.toLowerCase() === account.toLowerCase() &&
+          unit.status !== 2
+      ),
     [account, units]
   );
 
@@ -1026,7 +1033,7 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
     if (!manufacturerTree) {
       return relevant
         .filter((unit) =>
-          unit.currentOwner.toLowerCase() === wallet ||
+          (unit.currentOwner.toLowerCase() === wallet && unit.status !== 2) ||
           (unit.status === 1 && unit.pendingReceiver.toLowerCase() === wallet)
         )
         .sort((left, right) => Number(left.id) - Number(right.id))
@@ -1074,7 +1081,7 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
   const walletLocalIds = useMemo(() => {
     const relevant = units
       .filter((unit) =>
-        unit.currentOwner.toLowerCase() === account.toLowerCase() ||
+        (unit.currentOwner.toLowerCase() === account.toLowerCase() && unit.status !== 2) ||
         (unit.status === 1 && unit.pendingReceiver.toLowerCase() === account.toLowerCase())
       )
       .sort((left, right) => Number(left.id) - Number(right.id));

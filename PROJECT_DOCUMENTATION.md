@@ -220,6 +220,7 @@ PharmaTree supports both full and partial quantity sales:
 1. **Partial sales (`sellQuantity`)**: The seller can sell any integer quantity $\le$ available stock. The contract creates a new child unit for the sold portion marked as `Sold`, decrements the seller's remaining inventory, and dynamically synchronizes metadata on-chain for both units (e.g. `Paracetamol, 30 tablets`).
 2. **Full sales (`markAsSold`)**: Direct sell method that marks the entire unit quantity as `Sold`.
 3. The inventory and partition views track partial sales with a dedicated `Partially sold` status badge and display exact sold/active quantity tallies.
+4. **Owned inventory detachment**: Sold units (`Status.Sold`) are detached from on-hand owned inventory and total stock volume calculations across dashboard and handler inventory views, ensuring on-hand volume reflects only active and custody-held units.
 
 ### Create medicine
 
@@ -248,12 +249,12 @@ The receiver must be authorized and must match the pending receiver stored on
 the unit. Acceptance changes ownership and returns the unit to `Active`.
 Rejection clears the pending receiver and sets the unit to `Rejected`.
 
-### Sale
+### Sale & Retail Dispensing
 
-The current owner can mark an active unit as sold. The contract sells the
-selected unit as a whole; the dashboard quantity field is used to verify that
-the requested amount does not exceed available stock. Sold units cannot be
-transferred again.
+The current owner can mark an active unit as sold either completely (`markAsSold`)
+or partially (`sellQuantity`). Partial dispensing splits the stock into an active remainder
+and a detached sold child unit with synchronized metadata. Sold units cannot be
+transferred or sold again and are detached from on-hand owned inventory tallies.
 
 ### Role administration
 
