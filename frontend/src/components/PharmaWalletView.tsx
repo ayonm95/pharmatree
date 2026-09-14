@@ -29,6 +29,12 @@ type UnitRecord = {
   acceptedAt?: number;
   rejectedAt?: number;
   soldAt?: number;
+  rejectedBy?: string;
+  rejectedFrom?: string;
+  initiatedTo?: string;
+  initiatedFrom?: string;
+  acceptedTo?: string;
+  acceptedFrom?: string;
 };
 const formatDate = (timestamp?: number) =>
   timestamp ? new Date(timestamp * 1000).toLocaleString() : "Not recorded";
@@ -40,9 +46,11 @@ type HistoryEntry = {
   type: string;
   from?: string;
   to?: string;
+  rejectedBy?: string;
   txHash: string;
   blockNumber: number;
   timestamp?: number;
+  quantity?: string;
 };
 
 type UnitActivity = {
@@ -51,6 +59,12 @@ type UnitActivity = {
   acceptedAt?: number;
   rejectedAt?: number;
   soldAt?: number;
+  rejectedBy?: string;
+  rejectedFrom?: string;
+  initiatedTo?: string;
+  initiatedFrom?: string;
+  acceptedTo?: string;
+  acceptedFrom?: string;
 };
 
 type ActionPopup = {
@@ -186,9 +200,21 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
             const current = activity[id] ?? {};
             const timestamp = blockTimes.get(log.blockNumber) ?? Math.floor(Date.now() / 1000);
             if (log.fragment?.name === "UnitCreated") current.createdAt = timestamp;
-            if (log.fragment?.name === "TransferInitiated") current.initiatedAt = timestamp;
-            if (log.fragment?.name === "TransferCompleted") current.acceptedAt = timestamp;
-            if (log.fragment?.name === "TransferRejected") current.rejectedAt = timestamp;
+            if (log.fragment?.name === "TransferInitiated") {
+              current.initiatedAt = timestamp;
+              current.initiatedFrom = String(log.args.from || log.args[1] || "");
+              current.initiatedTo = String(log.args.to || log.args[2] || "");
+            }
+            if (log.fragment?.name === "TransferCompleted") {
+              current.acceptedAt = timestamp;
+              current.acceptedFrom = String(log.args.from || log.args[1] || "");
+              current.acceptedTo = String(log.args.to || log.args[2] || "");
+            }
+            if (log.fragment?.name === "TransferRejected") {
+              current.rejectedAt = timestamp;
+              current.rejectedFrom = String(log.args.from || log.args[1] || "");
+              current.rejectedBy = String(log.args.rejectedBy || log.args[2] || "");
+            }
             if (log.fragment?.name === "UnitSold") current.soldAt = timestamp;
             activity[id] = current;
           } catch {
@@ -497,12 +523,19 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
       setIsAdmin(adminAddress.toLowerCase() === walletAddress.toLowerCase());
 
       const allUnits = await fetchAllUnits(contractToUse);
-      const unitDetails = allUnits.filter((unit) => {
+      const activity = await fetchUnitActivity(contractToUse);
+      const enrichedUnits = allUnits.map((unit) =>
+        activity && activity[unit.id] ? { ...unit, ...activity[unit.id] } : unit
+      );
+
+      const unitDetails = enrichedUnits.filter((unit) => {
         const lowerWallet = walletAddress.toLowerCase();
         return (
           unit.manufacturer.toLowerCase() === lowerWallet ||
           unit.currentOwner.toLowerCase() === lowerWallet ||
-          unit.pendingReceiver.toLowerCase() === lowerWallet
+          unit.pendingReceiver.toLowerCase() === lowerWallet ||
+          unit.rejectedBy?.toLowerCase() === lowerWallet ||
+          unit.initiatedTo?.toLowerCase() === lowerWallet
         );
       });
 
@@ -511,43 +544,104 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
       const pendingIncoming = unitDetails.filter(
         (unit) => unit.pendingReceiver.toLowerCase() === walletAddress.toLowerCase() && unit.status === 1
       );
-      const pendingTransfers = allUnits.filter(
+      const pendingTransfers = enrichedUnits.filter(
         (unit) => unit.status === 1 && (
           unit.currentOwner.toLowerCase() === walletAddress.toLowerCase() ||
           unit.pendingReceiver.toLowerCase() === walletAddress.toLowerCase()
         )
       );
 
-      const syntheticHistory: HistoryEntry[] = unitDetails.map((unit) => {
-        const targetAddress =
-          unit.pendingReceiver !== "0x0000000000000000000000000000000000000000" ? unit.pendingReceiver : unit.currentOwner;
-        const normalizedTarget =
-          targetAddress && targetAddress !== "0x0000000000000000000000000000000000000000" ? targetAddress : undefined;
+      const syntheticHistory: HistoryEntry[] = enrichedUnits.flatMap((unit) => {
+        const entries: HistoryEntry[] = [];
 
-        return {
-          id: unit.id,
-          type: unit.status === 1
-            ? "TransferInitiated"
-            : unit.status === 2
-              ? "UnitSold"
-              : unit.status === 3
-                ? "TransferRejected"
-                : unit.acceptedAt
-                  ? "TransferCompleted"
-                  : "CurrentState",
-          from: unit.manufacturer,
-          to: normalizedTarget,
-          txHash: "state-read",
-          blockNumber: 0,
-          timestamp: unit.acceptedAt ?? unit.initiatedAt ?? unit.createdAt,
-        };
+        // 1. Transfer Rejected
+        if (unit.status === 3 || unit.rejectedAt) {
+          entries.push({
+            id: unit.id,
+            type: "TransferRejected",
+            from: unit.rejectedFrom || unit.manufacturer,
+            to: unit.rejectedBy,
+            rejectedBy: unit.rejectedBy,
+            txHash: "rejected",
+            blockNumber: 0,
+            timestamp: unit.rejectedAt ?? unit.createdAt,
+            quantity: unit.quantity,
+          });
+        }
+
+        // 2. Transfer Initiated (pending or historical)
+        if (unit.status === 1 || unit.initiatedAt) {
+          const toTarget =
+            unit.pendingReceiver !== "0x0000000000000000000000000000000000000000"
+              ? unit.pendingReceiver
+              : unit.initiatedTo;
+          entries.push({
+            id: unit.id,
+            type: "TransferInitiated",
+            from: unit.initiatedFrom || unit.manufacturer,
+            to: toTarget,
+            txHash: "initiated",
+            blockNumber: 0,
+            timestamp: unit.initiatedAt ?? unit.createdAt,
+            quantity: unit.quantity,
+          });
+        }
+
+        // 3. Transfer Completed
+        if (unit.acceptedAt) {
+          entries.push({
+            id: unit.id,
+            type: "TransferCompleted",
+            from: unit.acceptedFrom || unit.manufacturer,
+            to: unit.acceptedTo || unit.currentOwner,
+            txHash: "completed",
+            blockNumber: 0,
+            timestamp: unit.acceptedAt,
+            quantity: unit.quantity,
+          });
+        }
+
+        // 4. Unit Sold
+        if (unit.status === 2 || unit.soldAt) {
+          entries.push({
+            id: unit.id,
+            type: "UnitSold",
+            from: unit.currentOwner,
+            to: undefined,
+            txHash: "sold",
+            blockNumber: 0,
+            timestamp: unit.soldAt ?? unit.createdAt,
+            quantity: unit.quantity,
+          });
+        }
+
+        // 5. Initial Created state (fallback if no events)
+        if (entries.length === 0) {
+          entries.push({
+            id: unit.id,
+            type: "CurrentState",
+            from: unit.manufacturer,
+            to: unit.currentOwner,
+            txHash: "state-read",
+            blockNumber: 0,
+            timestamp: unit.createdAt,
+            quantity: unit.quantity,
+          });
+        }
+
+        return entries;
       });
-      setUnits(allUnits);
-      setHistory(syntheticHistory.filter((entry) => {
-        const fromIsUser = entry.from?.toLowerCase() === walletAddress.toLowerCase();
-        const toIsUser = entry.to?.toLowerCase() === walletAddress.toLowerCase();
-        return (fromIsUser || toIsUser) && Boolean(entry.to || entry.from);
-      }));
+
+      const userHistory = syntheticHistory.filter((entry) => {
+        const lowerWallet = walletAddress.toLowerCase();
+        const fromIsUser = entry.from?.toLowerCase() === lowerWallet;
+        const toIsUser = entry.to?.toLowerCase() === lowerWallet;
+        const rejectedByUser = entry.rejectedBy?.toLowerCase() === lowerWallet;
+        return fromIsUser || toIsUser || rejectedByUser;
+      }).sort((a, b) => Number(b.timestamp || 0) - Number(a.timestamp || 0));
+
+      setUnits(enrichedUnits);
+      setHistory(userHistory);
       setPendingApprovalCount(pendingTransfers.length);
 
       if (createdByUser.length === 0 && ownedUnits.length === 0 && pendingIncoming.length === 0) {
@@ -838,33 +932,57 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
       }
     }
 
+    const isDirectlyRejected = partitionUnit.status === 3;
+    const isDirectlyPending = partitionUnit.status === 1;
+    const isDirectlySold = partitionUnit.status === 2;
     const soldUnits = branchUnits.filter((u) => u.status === 2);
     const soldQty = soldUnits.reduce((sum, u) => sum + Number(u.quantity || 0), 0);
     const activeUnits = branchUnits.filter((u) => u.status === 0);
     const activeQty = activeUnits.reduce((sum, u) => sum + Number(u.quantity || 0), 0);
     const pendingUnits = branchUnits.filter((u) => u.status === 1);
     const pendingQty = pendingUnits.reduce((sum, u) => sum + Number(u.quantity || 0), 0);
+    const rejectedUnits = branchUnits.filter((u) => u.status === 3);
+    const rejectedQty = rejectedUnits.reduce((sum, u) => sum + Number(u.quantity || 0), 0);
     const totalBranchQty = branchUnits.reduce((sum, u) => sum + Number(u.quantity || 0), 0);
+    const partitionQty = Number(partitionUnit.quantity || 0);
 
     let statusText = "Transferred";
     let statusBadgeClass = styles.statusTransferred;
+    let displayQty = partitionQty;
 
-    if (soldQty === totalBranchQty && totalBranchQty > 0) {
+    if (isDirectlyRejected || (rejectedQty === totalBranchQty && totalBranchQty > 0)) {
+      statusText = "Rejected";
+      statusBadgeClass = styles.statusRejected;
+      displayQty = partitionQty;
+    } else if (isDirectlyPending || (pendingQty === totalBranchQty && totalBranchQty > 0)) {
+      statusText = "Pending transfer";
+      statusBadgeClass = styles.statusPending;
+      displayQty = partitionQty;
+    } else if (isDirectlySold || (soldQty === totalBranchQty && totalBranchQty > 0)) {
       statusText = "Sold";
       statusBadgeClass = styles.statusSold;
+      displayQty = totalBranchQty;
     } else if (soldQty > 0) {
       statusText = "Partially sold";
       statusBadgeClass = styles.statusPartialTransfer;
-    } else if (pendingQty > 0) {
-      statusText = "Pending transfer";
-      statusBadgeClass = styles.statusPending;
+      displayQty = activeQty;
+    } else if (partitionUnit.currentOwner.toLowerCase() === account.toLowerCase() && partitionUnit.status === 0) {
+      statusText = "In stock";
+      statusBadgeClass = styles.statusInStock;
+      displayQty = partitionQty;
+    } else {
+      statusText = "Transferred";
+      statusBadgeClass = styles.statusTransferred;
+      displayQty = activeQty > 0 ? activeQty : partitionQty;
     }
 
     return {
       soldQty,
       activeQty,
       pendingQty,
+      rejectedQty,
       totalBranchQty,
+      displayQty,
       statusText,
       statusBadgeClass,
     };
@@ -879,7 +997,7 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
         const lineage = [root, ...descendants];
         const totalQuantity = lineage.reduce((sum, unit) => sum + Number(unit.quantity), 0);
         const manufacturerQuantity = lineage
-          .filter((unit) => unit.currentOwner.toLowerCase() === wallet && unit.status === 0)
+          .filter((unit) => unit.currentOwner.toLowerCase() === wallet && (unit.status === 0 || unit.status === 3))
           .reduce((sum, unit) => sum + Number(unit.quantity), 0);
         const directDescendants = descendants.filter((unit) => unit.parentId === root.id);
         const partitions = directDescendants.length > 0 ? directDescendants : descendants.filter((unit) =>
@@ -1001,7 +1119,9 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
         (unit) =>
           unit.manufacturer.toLowerCase() === account.toLowerCase() ||
           unit.currentOwner.toLowerCase() === account.toLowerCase() ||
-          unit.pendingReceiver.toLowerCase() === account.toLowerCase()
+          unit.pendingReceiver.toLowerCase() === account.toLowerCase() ||
+          unit.rejectedBy?.toLowerCase() === account.toLowerCase() ||
+          unit.initiatedTo?.toLowerCase() === account.toLowerCase()
       ),
     [account, units]
   );
@@ -1174,11 +1294,13 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
                                       <div className={styles.partitionRow}>
                                         <span><strong>#{partition.displayId}</strong></span>
                                         <span>
-                                          Qty {stats.activeQty > 0 ? stats.activeQty : 0}
-                                          {stats.soldQty > 0 ? ` (${stats.soldQty}/${stats.totalBranchQty} Sold)` : ""}
+                                          Qty {stats.displayQty}
+                                          {stats.soldQty > 0 && stats.statusText === "Partially sold" ? ` (${stats.soldQty}/${stats.totalBranchQty} Sold)` : ""}
                                         </span>
                                         <span className={`${styles.statusBadge} ${stats.statusBadgeClass}`}>
-                                          {stats.statusText}
+                                          {partition.status === 3 && partition.rejectedBy
+                                            ? `Rejected by ${formatAddress(partition.rejectedBy)}`
+                                            : stats.statusText}
                                         </span>
                                       </div>
                                     </div>
@@ -1262,6 +1384,9 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
                   // Sold units (Status 2)
                   const soldCount = userUnits.filter((u) => u.status === 2 && u.currentOwner.toLowerCase() === lowerWallet).length;
 
+                  // Rejected units returned to custody (Status 3)
+                  const rejectedCount = userUnits.filter((u) => u.status === 3 && u.currentOwner.toLowerCase() === lowerWallet).length;
+
                   return (
                     <div className={styles.footerRow} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                       <div>
@@ -1272,6 +1397,7 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
                         <div style={{ fontSize: '11px', color: '#64748b', marginTop: '6px', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
                           <span style={{ color: '#0d9488', fontWeight: 600 }}>● {activeCount} Active</span>
                           <span style={{ color: '#f59e0b', fontWeight: 600 }}>● {pendingCount} Pending</span>
+                          {rejectedCount > 0 && <span style={{ color: '#ef4444', fontWeight: 600 }}>● {rejectedCount} Rejected</span>}
                           <span style={{ color: '#64748b', fontWeight: 600 }}>● {soldCount} Sold</span>
                         </div>
                       </div>
@@ -1505,19 +1631,67 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
                       {visibleHistory.map((entry) => {
                         const unit = units.find((u) => u.id === entry.id);
                         const medName = unit ? (unit.metadata || "").split(",")[0] : `Unit ${entry.id}`;
+                        const isRejection = entry.type === "TransferRejected";
+                        const rejecterAddr = entry.rejectedBy || entry.to;
+                        const isRejecter = Boolean(rejecterAddr && rejecterAddr.toLowerCase() === account.toLowerCase());
+                        const isInitiator = Boolean(entry.from && entry.from.toLowerCase() === account.toLowerCase());
+
+                        let typeBadgeText = entry.type;
+                        let typeBadgeClass = styles.statusTransferred;
+
+                        if (isRejection) {
+                          typeBadgeClass = styles.statusRejected;
+                          typeBadgeText = isRejecter ? "Rejected by You" : "Transfer Rejected";
+                        } else if (entry.type === "TransferInitiated") {
+                          typeBadgeClass = styles.statusPending;
+                          typeBadgeText = isInitiator ? "Transfer Sent" : "Transfer Received";
+                        } else if (entry.type === "TransferCompleted") {
+                          typeBadgeClass = styles.statusAvailable;
+                          typeBadgeText = "Transfer Accepted";
+                        } else if (entry.type === "UnitSold") {
+                          typeBadgeClass = styles.statusSold;
+                          typeBadgeText = "Dispensed / Sold";
+                        }
+
                         return (
                           <article key={`${entry.id}-${entry.txHash}`} className={styles.transferTile} onClick={() => setModalUnit(unit || null)}>
                             <div className={styles.tileHeader}>
                               <div className={styles.tileTitle}>{medName}</div>
-                              <div className={styles.tileMeta}>{entry.type}</div>
+                              <span className={`${styles.statusBadge} ${typeBadgeClass}`}>{typeBadgeText}</span>
                             </div>
                             <div className={styles.tileBody}>
-                              <div><strong>Unit:</strong> {unit
-                                ? (role.manufacturer || isAdmin ? unit.displayId : localUnitId(unit))
-                                : entry.id}</div>
+                              <div>
+                                <strong>Unit:</strong> #{unit
+                                  ? (role.manufacturer || isAdmin ? unit.displayId : localUnitId(unit))
+                                  : entry.id}
+                              </div>
+                              {(entry.quantity || unit?.quantity) && (
+                                <div><strong>Quantity:</strong> {entry.quantity || unit?.quantity} tablets</div>
+                              )}
                               <div><strong>When:</strong> {formatDate(entry.timestamp)}</div>
-                              <div><strong>From:</strong> <span style={{ fontFamily: 'monospace' }}>{formatAddress(entry.from)}</span></div>
-                              <div><strong>To:</strong> <span style={{ fontFamily: 'monospace' }}>{formatAddress(entry.to)}</span></div>
+                              <div>
+                                <strong>From:</strong>{" "}
+                                <span style={{ fontFamily: 'monospace' }}>
+                                  {isInitiator ? `You (${formatAddress(entry.from)})` : formatAddress(entry.from)}
+                                </span>
+                              </div>
+                              {isRejection ? (
+                                <div>
+                                  <strong>Rejected by:</strong>{" "}
+                                  <span style={{ fontFamily: 'monospace', color: '#b91c1c', fontWeight: 600 }}>
+                                    {isRejecter ? `You (${formatAddress(rejecterAddr)})` : formatAddress(rejecterAddr)}
+                                  </span>
+                                </div>
+                              ) : (
+                                <div>
+                                  <strong>To:</strong>{" "}
+                                  <span style={{ fontFamily: 'monospace' }}>
+                                    {entry.to && entry.to.toLowerCase() === account.toLowerCase()
+                                      ? `You (${formatAddress(entry.to)})`
+                                      : formatAddress(entry.to)}
+                                  </span>
+                                </div>
+                              )}
                             </div>
                           </article>
                         );
@@ -1532,7 +1706,7 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
           {mode === "inventory" && (
             <section className={styles.panel}>
               <h2>Medicine inventory</h2>
-              {userUnits.length === 0 ? (
+              {inventoryGroups.length === 0 ? (
                 <p className={styles.empty}>No medicine records for this account.</p>
               ) : (
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', marginTop: '16px' }}>
@@ -1543,7 +1717,13 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
                     const lineage = [unit, ...partitions];
                     const totalQuantity = lineage.reduce((sum, candidate) => sum + Number(candidate.quantity), 0);
                     const currentQuantity = lineage
+                      .filter((candidate) => (candidate.status === 0 || candidate.status === 3) && candidate.currentOwner.toLowerCase() === account.toLowerCase())
+                      .reduce((sum, candidate) => sum + Number(candidate.quantity), 0);
+                    const activeStockQuantity = lineage
                       .filter((candidate) => candidate.status === 0 && candidate.currentOwner.toLowerCase() === account.toLowerCase())
+                      .reduce((sum, candidate) => sum + Number(candidate.quantity), 0);
+                    const rejectedStockQuantity = lineage
+                      .filter((candidate) => candidate.status === 3 && candidate.currentOwner.toLowerCase() === account.toLowerCase())
                       .reduce((sum, candidate) => sum + Number(candidate.quantity), 0);
                     const isPartial = manufacturerTree && currentQuantity < totalQuantity;
                     const rootStatus = isPartial ? "Partially transferred" : displayStatus(unit);
@@ -1594,10 +1774,30 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
                             <p style={{ margin: 0, color: '#334155' }}>
                               <strong>Current Owner:</strong> <span style={{ fontFamily: 'monospace' }}>{truncate(unit.currentOwner)}</span>
                             </p>
+                            {unit.status === 3 && unit.rejectedBy ? (
+                              <p style={{ margin: 0, color: '#b91c1c' }}>
+                                <strong>Rejected by:</strong> <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>{truncate(unit.rejectedBy)}</span>
+                              </p>
+                            ) : (
+                              <p style={{ margin: 0, color: '#334155' }}>
+                                <strong>Pending Receiver:</strong> <span style={{ fontFamily: 'monospace' }}>{truncate(unit.pendingReceiver)}</span>
+                              </p>
+                            )}
                             <p style={{ margin: 0, color: '#334155' }}>
-                              <strong>Pending Receiver:</strong> <span style={{ fontFamily: 'monospace' }}>{truncate(unit.pendingReceiver)}</span>
+                              <strong>Quantity:</strong>{" "}
+                              {manufacturerTree ? (
+                                <>
+                                  {currentQuantity} in stock / {totalQuantity} total
+                                  {rejectedStockQuantity > 0 && (
+                                    <span style={{ color: '#64748b', fontSize: '13px', marginLeft: '6px' }}>
+                                      ({activeStockQuantity} active, {rejectedStockQuantity} rejected returned)
+                                    </span>
+                                  )}
+                                </>
+                              ) : (
+                                unit.quantity
+                              )}
                             </p>
-                            <p style={{ margin: 0, color: '#334155' }}><strong>Quantity:</strong> {manufacturerTree ? `${currentQuantity} in stock / ${totalQuantity} total` : unit.quantity}</p>
                             <p style={{ margin: 0, color: '#334155' }}><strong>Parent / root:</strong> {unit.parentId === "0" ? "Root" : `${unit.parentId} / ${unit.rootId}`}</p>
                             <p style={{ margin: 0, color: '#334155' }}><strong>Created:</strong> {formatDate(unit.createdAt)}</p>
                             <p style={{ margin: 0, color: '#334155' }}><strong>Accepted:</strong> {formatDate(unit.acceptedAt)}</p>
@@ -1621,8 +1821,14 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
                                   {unitHistoryLogs.map((log, idx) => (
                                     <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', fontSize: '12px', fontFamily: 'monospace' }}>
-                                      <span>{log.type}</span>
-                                      <span>{truncate(log.from || "")} ➔ {truncate(log.to || "")}</span>
+                                      <span style={{ color: log.type === "TransferRejected" ? '#b91c1c' : undefined, fontWeight: log.type === "TransferRejected" ? 600 : undefined }}>
+                                        {log.type === "TransferRejected" ? "Transfer Rejected" : log.type}
+                                      </span>
+                                      <span>
+                                        {log.type === "TransferRejected"
+                                          ? `${truncate(log.from || "")} ➔ Rejected by ${truncate(log.rejectedBy || log.to || "")}`
+                                          : `${truncate(log.from || "")} ➔ ${truncate(log.to || "")}`}
+                                      </span>
                                     </div>
                                   ))}
                                 </div>
@@ -1639,6 +1845,7 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
                                 <div className={styles.inventoryPartitionList}>
                                   {partitions.map((partition) => {
                                     const partitionExpanded = !!expandedUnits[`inventory-partition-${partition.id}`];
+                                    const isRejected = partition.status === 3;
                                     return (
                                       <div key={partition.id} className={styles.inventoryPartitionTile}>
                                         <button
@@ -1652,15 +1859,32 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
                                         >
                                           <strong>#{role.manufacturer || isAdmin ? partition.displayId : localUnitId(partition)}</strong>
                                           <span>Qty {partition.quantity}</span>
-                                          <span className={`${styles.statusBadge} ${statusClass(partition)}`}>{displayStatus(partition)}</span>
+                                          {isRejected && partition.rejectedBy ? (
+                                            <span className={`${styles.statusBadge} ${styles.statusRejected}`}>
+                                              Rejected by {truncate(partition.rejectedBy)}
+                                            </span>
+                                          ) : (
+                                            <span className={`${styles.statusBadge} ${statusClass(partition)}`}>{displayStatus(partition)}</span>
+                                          )}
                                           <span className={styles.partitionChevron}>{partitionExpanded ? '−' : '+'}</span>
                                         </button>
                                         {partitionExpanded && (
                                           <div className={styles.partitionDetails}>
                                             <span>Current owner</span>
                                             <strong>{truncate(partition.currentOwner)}</strong>
-                                            <span>To</span>
-                                            <strong>{truncate(partition.pendingReceiver)}</strong>
+                                            {isRejected && partition.rejectedBy ? (
+                                              <>
+                                                <span style={{ color: '#b91c1c' }}>Rejected by</span>
+                                                <strong style={{ color: '#b91c1c', fontFamily: 'monospace' }}>{truncate(partition.rejectedBy)}</strong>
+                                                <span>Status</span>
+                                                <strong style={{ color: '#b91c1c' }}>Returned to sender</strong>
+                                              </>
+                                            ) : (
+                                              <>
+                                                <span>To</span>
+                                                <strong>{truncate(partition.pendingReceiver)}</strong>
+                                              </>
+                                            )}
                                           </div>
                                         )}
                                       </div>
@@ -1801,14 +2025,47 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
             </div>
             <div style={{marginTop:12}}>
               <p><strong>Unit ID:</strong> {modalUnit.displayId}</p>
-              <p><strong>Manufacturer:</strong> {modalUnit.manufacturer}</p>
-              <p><strong>Current owner:</strong> {modalUnit.currentOwner}</p>
-              <p><strong>Pending receiver:</strong> {modalUnit.pendingReceiver || 'None'}</p>
-              <p><strong>Quantity:</strong> {modalUnit.quantity}</p>
+              <p><strong>Manufacturer:</strong> <span style={{ fontFamily: 'monospace' }}>{modalUnit.manufacturer}</span></p>
+              <p><strong>Current owner:</strong> <span style={{ fontFamily: 'monospace' }}>{modalUnit.currentOwner}</span></p>
+              {modalUnit.status === 3 ? (
+                <p style={{ color: '#b91c1c' }}>
+                  <strong>Rejected by:</strong>{" "}
+                  <span style={{ fontFamily: 'monospace', fontWeight: 600 }}>
+                    {modalUnit.rejectedBy
+                      ? (modalUnit.rejectedBy.toLowerCase() === account.toLowerCase()
+                          ? `You (${modalUnit.rejectedBy})`
+                          : modalUnit.rejectedBy)
+                      : "Receiver"}
+                  </span>
+                </p>
+              ) : (
+                <p>
+                  <strong>Pending receiver:</strong>{" "}
+                  <span style={{ fontFamily: 'monospace' }}>
+                    {modalUnit.pendingReceiver && modalUnit.pendingReceiver !== "0x0000000000000000000000000000000000000000"
+                      ? modalUnit.pendingReceiver
+                      : "None"}
+                  </span>
+                </p>
+              )}
+              <p><strong>Quantity:</strong> {modalUnit.quantity} tablets</p>
               <p><strong>Parent / root:</strong> {modalUnit.parentId === "0" ? "Root" : `${modalUnit.parentId} / ${modalUnit.rootId}`}</p>
               <p><strong>Created:</strong> {formatDate(modalUnit.createdAt)}</p>
-              <p><strong>Accepted:</strong> {formatDate(modalUnit.acceptedAt)}</p>
-              <p><strong>Status:</strong> {displayStatus(modalUnit)}</p>
+              {modalUnit.status === 3 && modalUnit.rejectedAt ? (
+                <p><strong>Rejected on:</strong> {formatDate(modalUnit.rejectedAt)}</p>
+              ) : (
+                <p><strong>Accepted:</strong> {formatDate(modalUnit.acceptedAt)}</p>
+              )}
+              <p>
+                <strong>Status:</strong>{" "}
+                <span className={`${styles.statusBadge} ${statusClass(modalUnit)}`}>
+                  {modalUnit.status === 3
+                    ? (modalUnit.rejectedBy
+                        ? `Rejected by ${formatAddress(modalUnit.rejectedBy)}`
+                        : "Rejected")
+                    : displayStatus(modalUnit)}
+                </span>
+              </p>
               <p><strong>Medicine Details:</strong> {getMedicineName(modalUnit.metadata)} ({modalUnit.quantity} tablets)</p>
 
               {modalUnit.status === 1 && modalUnit.pendingReceiver.toLowerCase() === account.toLowerCase() && (
