@@ -68,24 +68,61 @@ export function useWalletActions({
         return;
       }
 
+      // Check permissions: only contract admin has AccessControl DEFAULT_ADMIN_ROLE to grant roles
+      if (!isAdmin) {
+        notify("Only the System Administrator can authorize new manufacturers or handlers.", "error");
+        return;
+      }
+
+      const cleanTarget = target.trim();
+      const roleLabel = type === "manufacturer" ? "Manufacturer" : "Handler";
+
       try {
         setLoading(true);
+
+        // Pre-check if target already has roles assigned
+        const [targetIsMfr, targetIsHnd] = await Promise.all([
+          readonlyContract.isManufacturer(cleanTarget),
+          readonlyContract.isHandler(cleanTarget),
+        ]);
+
+        if (type === "manufacturer" && targetIsMfr) {
+          notify(`Role already assigned: ${cleanTarget} is already an authorized Manufacturer.`, "error");
+          setLoading(false);
+          return;
+        }
+
+        if (type === "handler" && targetIsHnd) {
+          notify(`Role already assigned: ${cleanTarget} is already an authorized Handler.`, "error");
+          setLoading(false);
+          return;
+        }
+
+        if (targetIsMfr || targetIsHnd) {
+          const currentRole = targetIsMfr && targetIsHnd ? "Manufacturer & Handler" : targetIsMfr ? "Manufacturer" : "Handler";
+          notify(`Role already assigned: Address already holds role '${currentRole}'.`, "info");
+        }
+
         const tx =
           type === "manufacturer"
-            ? await contract.addManufacturer(target)
-            : await contract.addHandler(target);
+            ? await contract.addManufacturer(cleanTarget)
+            : await contract.addHandler(cleanTarget);
         await tx.wait();
-        const roleLabel = type === "manufacturer" ? "Manufacturer" : "Handler";
-        notify(`${roleLabel} role granted to ${target}.`, "success");
+        notify(`${roleLabel} role granted to ${cleanTarget}.`, "success");
         await refreshData(account, contract);
       } catch (err: any) {
         console.error("assignRole error:", err);
-        notify(`Could not grant the ${type} role.`, "error");
+        const errMessage = err?.reason || err?.message || "";
+        if (errMessage.includes("Not admin")) {
+          notify("Transaction reverted: Only the contract Administrator can grant roles.", "error");
+        } else {
+          notify(`Could not grant the ${type} role: ${errMessage.slice(0, 80)}`, "error");
+        }
       } finally {
         setLoading(false);
       }
     },
-    [account, contract, notify, refreshData]
+    [account, contract, isAdmin, notify, readonlyContract, refreshData]
   );
 
   const initiateTransfer = useCallback(

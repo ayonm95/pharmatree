@@ -27,7 +27,7 @@ export function AdminTab({
   const [roleTarget, setRoleTarget] = useState("");
   const [roleType, setRoleType] = useState<"manufacturer" | "handler">("manufacturer");
 
-  const canManage = Boolean(account) && (isAdmin || role.manufacturer || role.handler);
+  const canManage = Boolean(account) && isAdmin;
   const canAddManufacturer = isAdmin;
 
   const handleSubmit = (e: React.FormEvent) => {
@@ -44,7 +44,7 @@ export function AdminTab({
         <EmptyState
           icon={<Wallet size={28} />}
           title="Wallet Not Connected"
-          description="Connect an authorized Admin or Manufacturer wallet to manage system permissions."
+          description="Connect an authorized Admin wallet to manage system roles."
           actionLabel="Connect Wallet"
           onAction={onConnectWallet}
         />
@@ -53,12 +53,13 @@ export function AdminTab({
   }
 
   if (!canManage) {
+    const roleLabel = role.manufacturer && role.handler ? "Manufacturer & Handler" : role.manufacturer ? "Manufacturer" : role.handler ? "Handler" : "Standard Account";
     return (
       <Card padding="lg">
         <EmptyState
           icon={<ShieldAlert size={28} />}
-          title="Administrative Access Required"
-          description="Your connected wallet does not hold administrator or manufacturer privileges on the PharmaTree smart contract."
+          title="Administrator Privileges Required"
+          description={`Your connected wallet is recognized as a ${roleLabel}. In accordance with smart-contract access control, only the System Administrator (DEFAULT_ADMIN_ROLE) can grant or assign roles to other accounts.`}
         />
       </Card>
     );

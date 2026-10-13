@@ -309,11 +309,13 @@ export function OverviewTab({
                 isAdmin
                   ? "No active medicine units found in the system."
                   : role.handler
-                  ? "You are an authorized Handler, but currently have no medicine units in custody. Check 'Pending Inbound' notifications for incoming transfers."
+                  ? `You are an authorized Handler (${formatAddress(account)}), but currently hold 0 medicine units in your custody. Review incoming shipments or request a batch transfer to begin processing.`
                   : role.manufacturer
                   ? "Your manufacturer wallet has no active units in stock. Create a new batch or review transferred units."
                   : "No active items currently held under your custody."
               }
+              actionLabel={role.handler ? "View Transfers" : undefined}
+              onAction={role.handler ? () => router.push("/transfers") : undefined}
             />
           ) : (
             <div
