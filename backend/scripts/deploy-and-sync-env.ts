@@ -45,6 +45,23 @@ async function main() {
     console.log(`Granted MANUFACTURER_ROLE to ${targetManufacturer}`);
   }
 
+  const defaultHandlers = [
+    "0xe88a5608B536BCc9d557823234BacA9a00F2540B",
+    "0x1589df48e9F04926E260Bf813c42dFb4a71893A3",
+  ];
+  for (const handlerAddr of defaultHandlers) {
+    try {
+      const isH = await contract.isHandler(handlerAddr);
+      if (!isH) {
+        const tx = await contract.addHandler(handlerAddr);
+        await tx.wait(1);
+        console.log(`Granted HANDLER_ROLE to ${handlerAddr}`);
+      }
+    } catch (e: any) {
+      console.warn(`Could not add handler ${handlerAddr}:`, e.message);
+    }
+  }
+
   const envPaths = [
     path.resolve(__dirname, "../.env"),
     path.resolve(__dirname, "../../frontend/.env.local"),

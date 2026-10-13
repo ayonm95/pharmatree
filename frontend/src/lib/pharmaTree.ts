@@ -27,7 +27,7 @@ export const PHARMA_TREE_ABI = [
   "event UnitReclaimed(uint256 indexed id, address indexed reclaimedBy)",
   "event UnitSold(uint256 indexed id, address indexed soldBy)"
 ] as const;
-export const PHARMA_TREE_CONTRACT = process.env.NEXT_PUBLIC_PHARMA_TREE_CONTRACT || "0x2bAE15834463a657F68673135B8deCd39EF33044";
+export const PHARMA_TREE_CONTRACT = process.env.NEXT_PUBLIC_PHARMA_TREE_CONTRACT || "0x7c40b82B39346A56Ba69df52A37eBBDfF541b198";
 export const PHARMA_TREE_CHAIN_ID = BigInt(process.env.NEXT_PUBLIC_CHAIN_ID || "11155111");
 
 export const UNIT_LEVELS = [
