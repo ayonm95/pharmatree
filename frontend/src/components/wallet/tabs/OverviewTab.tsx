@@ -61,16 +61,16 @@ export function OverviewTab({
     () =>
       units.filter(
         (unit) =>
-          (isAdmin || unit.currentOwner.toLowerCase() === lowerAccount) &&
+          unit.currentOwner.toLowerCase() === lowerAccount &&
           unit.status !== 2
       ),
-    [isAdmin, lowerAccount, units]
+    [lowerAccount, units]
   );
 
-  const activeCount = units.filter((u) => u.status === 0 && (isAdmin || u.currentOwner.toLowerCase() === lowerAccount)).length;
-  const pendingCount = units.filter((u) => u.status === 1 && (isAdmin || u.currentOwner.toLowerCase() === lowerAccount || u.pendingReceiver.toLowerCase() === lowerAccount)).length;
-  const soldCount = units.filter((u) => u.status === 2 && (isAdmin || u.currentOwner.toLowerCase() === lowerAccount)).length;
-  const rejectedCount = units.filter((u) => u.status === 3 && (isAdmin || u.currentOwner.toLowerCase() === lowerAccount)).length;
+  const activeCount = units.filter((u) => u.status === 0 && u.currentOwner.toLowerCase() === lowerAccount).length;
+  const pendingCount = units.filter((u) => u.status === 1 && (u.currentOwner.toLowerCase() === lowerAccount || u.pendingReceiver.toLowerCase() === lowerAccount)).length;
+  const soldCount = units.filter((u) => u.status === 2 && u.currentOwner.toLowerCase() === lowerAccount).length;
+  const rejectedCount = units.filter((u) => u.status === 3 && u.currentOwner.toLowerCase() === lowerAccount).length;
 
   const toggleExpand = (id: string) => {
     setExpandedUnits((prev) => ({ ...prev, [id]: !prev[id] }));
