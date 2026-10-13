@@ -5,8 +5,8 @@ const DEFAULT_SEPOLIA_NETWORK = { chainId: DEFAULT_SEPOLIA_CHAIN_ID, name: "sepo
 
 const PUBLIC_SEPOLIA_RPCS = [
   "https://ethereum-sepolia-rpc.publicnode.com",
+  "https://sepolia.gateway.tenderly.co",
   "https://gateway.tenderly.co/public/sepolia",
-  "https://1rpc.io/sepolia",
 ];
 
 function getRpcEndpoints(): string[] {
@@ -39,7 +39,7 @@ export function getReadonlyProvider(): ethers.FallbackProvider {
       provider: jsonProvider,
       priority: index + 1,
       weight: 1,
-      stallTimeout: 2000,
+      stallTimeout: 750, // Rapid 750ms failover instead of hanging on stalled requests
     };
   });
 

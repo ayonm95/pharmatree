@@ -112,11 +112,22 @@ function VerifyContent() {
           const configuredStart = Number(process.env.NEXT_PUBLIC_DEPLOYMENT_BLOCK || "11683269");
           const fromBlock = configuredStart > 0 ? configuredStart : Math.max(0, latestBlock - 15000);
 
-          const rawLogs = await provider.getLogs({
-            address: PHARMA_TREE_CONTRACT,
-            fromBlock,
-            toBlock: latestBlock,
-          });
+          const LOG_CHUNK_SIZE = 40_000;
+          const ranges: { from: number; to: number }[] = [];
+          for (let start = fromBlock; start <= latestBlock; start += LOG_CHUNK_SIZE) {
+            ranges.push({ from: start, to: Math.min(start + LOG_CHUNK_SIZE - 1, latestBlock) });
+          }
+
+          const chunkResults = await Promise.all(
+            ranges.map((r) =>
+              provider.getLogs({
+                address: PHARMA_TREE_CONTRACT,
+                fromBlock: r.from,
+                toBlock: r.to,
+              })
+            )
+          );
+          const rawLogs = chunkResults.flat();
 
           const iface = new ethers.Interface(PHARMA_TREE_ABI);
           const blockTimes = new Map<number, number>();

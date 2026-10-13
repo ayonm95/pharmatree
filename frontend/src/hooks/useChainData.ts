@@ -12,7 +12,6 @@ import { withRpcRetry } from "./useRpcRetry";
 import { UnitRecord, HistoryEntry, UnitActivity } from "@/types/pharmatree";
 
 const WALLET_STORAGE_KEY = "pharmatree-wallet-address";
-const EVENT_QUERY_WINDOW = 9_000;
 const DEFAULT_EVENT_LOOKBACK = 10_000;
 const ACTIVITY_CACHE_TTL = 30_000;
 
@@ -54,15 +53,24 @@ export function useChainData() {
           ? configuredStart
           : Math.max(0, latestBlock - DEFAULT_EVENT_LOOKBACK);
 
-        const logs: ethers.Log[] = [];
-        for (let start = fromBlock; start <= latestBlock; start += EVENT_QUERY_WINDOW) {
-          const end = Math.min(start + EVENT_QUERY_WINDOW - 1, latestBlock);
-          logs.push(...await withRpcRetry(() => readonlyProvider.getLogs({
-            address: PHARMA_TREE_CONTRACT,
-            fromBlock: start,
-            toBlock: end,
-          })));
+        const LOG_CHUNK_SIZE = 40_000;
+        const ranges: { from: number; to: number }[] = [];
+        for (let start = fromBlock; start <= latestBlock; start += LOG_CHUNK_SIZE) {
+          ranges.push({ from: start, to: Math.min(start + LOG_CHUNK_SIZE - 1, latestBlock) });
         }
+
+        const logResults = await Promise.all(
+          ranges.map((r) =>
+            withRpcRetry(() =>
+              readonlyProvider.getLogs({
+                address: PHARMA_TREE_CONTRACT,
+                fromBlock: r.from,
+                toBlock: r.to,
+              })
+            )
+          )
+        );
+        const logs: ethers.Log[] = logResults.flat();
 
         const blockTimes = new Map<number, number>();
         const uniqueBlockNumbers = Array.from(new Set(logs.map((l) => l.blockNumber)));
