@@ -194,75 +194,74 @@ export function useChainData() {
       setIsAdmin(adminAddress.toLowerCase() === walletAddress.toLowerCase());
 
       const allUnits = await fetchAllUnits(contractToUse);
-      const activity = await fetchUnitActivity(contractToUse);
-      const enrichedUnits = allUnits.map((unit) =>
-        activity && activity[unit.id] ? { ...unit, ...activity[unit.id] } : unit
+      // Immediately set units so inventory renders in < 1s without waiting for 25 getLogs calls
+      setUnits(allUnits);
+
+      const lowerWallet = walletAddress.toLowerCase();
+      const pendingIncoming = allUnits.filter(
+        (unit) => unit.pendingReceiver.toLowerCase() === lowerWallet && unit.status === 1
       );
-
-      const unitDetails = enrichedUnits.filter((unit) => {
-        const lowerWallet = walletAddress.toLowerCase();
-        return (
-          unit.manufacturer.toLowerCase() === lowerWallet ||
-          unit.currentOwner.toLowerCase() === lowerWallet ||
-          unit.pendingReceiver.toLowerCase() === lowerWallet ||
-          unit.rejectedBy?.toLowerCase() === lowerWallet ||
-          unit.initiatedTo?.toLowerCase() === lowerWallet
-        );
-      });
-
-      const pendingIncoming = unitDetails.filter(
-        (unit) => unit.pendingReceiver.toLowerCase() === walletAddress.toLowerCase() && unit.status === 1
-      );
-
-      const syntheticHistory: HistoryEntry[] = enrichedUnits.flatMap((unit) => {
-        const entries: HistoryEntry[] = [];
-        if (unit.status === 3 || unit.rejectedAt) {
-          entries.push({
-            id: unit.id,
-            type: "TransferRejected",
-            from: unit.rejectedFrom || unit.manufacturer,
-            to: unit.rejectedBy,
-            rejectedBy: unit.rejectedBy,
-            txHash: "rejected",
-            blockNumber: 0,
-            timestamp: unit.rejectedAt ?? unit.createdAt,
-            quantity: unit.quantity,
-          });
-        }
-        if (unit.status === 1 || unit.initiatedAt) {
-          const toTarget =
-            unit.pendingReceiver !== "0x0000000000000000000000000000000000000000"
-              ? unit.pendingReceiver
-              : unit.initiatedTo;
-          entries.push({
-            id: unit.id,
-            type: "TransferInitiated",
-            from: unit.initiatedFrom || unit.manufacturer,
-            to: toTarget,
-            txHash: "initiated",
-            blockNumber: 0,
-            timestamp: unit.initiatedAt ?? unit.createdAt,
-            quantity: unit.quantity,
-          });
-        }
-        if (unit.acceptedAt) {
-          entries.push({
-            id: unit.id,
-            type: "TransferCompleted",
-            from: unit.acceptedFrom || unit.manufacturer,
-            to: unit.acceptedTo || unit.currentOwner,
-            txHash: "completed",
-            blockNumber: 0,
-            timestamp: unit.acceptedAt,
-            quantity: unit.quantity,
-          });
-        }
-        return entries;
-      });
-
-      setUnits(enrichedUnits);
-      setHistory(syntheticHistory);
       setPendingApprovalCount(pendingIncoming.length);
+
+      // Hydrate historical logs asynchronously in the background without blocking active inventory
+      void fetchUnitActivity(contractToUse)
+        .then((activity) => {
+          if (!activity || Object.keys(activity).length === 0) return;
+          const enrichedUnits = allUnits.map((unit) =>
+            activity && activity[unit.id] ? { ...unit, ...activity[unit.id] } : unit
+          );
+          setUnits(enrichedUnits);
+
+          const syntheticHistory: HistoryEntry[] = enrichedUnits.flatMap((unit) => {
+            const entries: HistoryEntry[] = [];
+            if (unit.status === 3 || unit.rejectedAt) {
+              entries.push({
+                id: unit.id,
+                type: "TransferRejected",
+                from: unit.rejectedFrom || unit.manufacturer,
+                to: unit.rejectedBy,
+                rejectedBy: unit.rejectedBy,
+                txHash: "rejected",
+                blockNumber: 0,
+                timestamp: unit.rejectedAt ?? unit.createdAt,
+                quantity: unit.quantity,
+              });
+            }
+            if (unit.status === 1 || unit.initiatedAt) {
+              const toTarget =
+                unit.pendingReceiver !== "0x0000000000000000000000000000000000000000"
+                  ? unit.pendingReceiver
+                  : unit.initiatedTo;
+              entries.push({
+                id: unit.id,
+                type: "TransferInitiated",
+                from: unit.initiatedFrom || unit.manufacturer,
+                to: toTarget,
+                txHash: "initiated",
+                blockNumber: 0,
+                timestamp: unit.initiatedAt ?? unit.createdAt,
+                quantity: unit.quantity,
+              });
+            }
+            if (unit.acceptedAt) {
+              entries.push({
+                id: unit.id,
+                type: "TransferCompleted",
+                from: unit.acceptedFrom || unit.manufacturer,
+                to: unit.acceptedTo || unit.currentOwner,
+                txHash: "completed",
+                blockNumber: 0,
+                timestamp: unit.acceptedAt,
+                quantity: unit.quantity,
+              });
+            }
+            return entries;
+          });
+          setHistory(syntheticHistory);
+        })
+        .catch((activityErr) => {
+          console.warn("Background activity fetch failed (non-critical):", activityErr);
+        });
     } catch (err) {
       console.error("loadWalletData failed:", err);
     }

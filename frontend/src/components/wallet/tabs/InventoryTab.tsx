@@ -25,6 +25,8 @@ export function InventoryTab({
   account,
   units,
   history,
+  role = { manufacturer: false, handler: false },
+  isAdmin = false,
   onOpenQr,
   onSelectUnitDetail,
 }: InventoryTabProps) {
@@ -33,13 +35,15 @@ export function InventoryTab({
   const lowerAccount = account.toLowerCase();
 
   const inventoryGroups = useMemo(() => {
-    const relevant = units.filter(
-      (unit) =>
-        unit.manufacturer.toLowerCase() === lowerAccount ||
-        unit.currentOwner.toLowerCase() === lowerAccount ||
-        (unit.status === 1 && unit.pendingReceiver.toLowerCase() === lowerAccount)
-    );
-    const manufacturerTree = relevant.some((unit) => unit.manufacturer.toLowerCase() === lowerAccount);
+    const relevant = isAdmin
+      ? units
+      : units.filter(
+          (unit) =>
+            unit.manufacturer.toLowerCase() === lowerAccount ||
+            unit.currentOwner.toLowerCase() === lowerAccount ||
+            (unit.status === 1 && unit.pendingReceiver.toLowerCase() === lowerAccount)
+        );
+    const manufacturerTree = isAdmin || relevant.some((unit) => unit.manufacturer.toLowerCase() === lowerAccount);
     if (!manufacturerTree) {
       return relevant
         .filter(
@@ -55,7 +59,7 @@ export function InventoryTab({
     return rootIds
       .map((rootId) => {
         const root = units.find((unit) => unit.id === rootId);
-        const isMfrTree = root?.manufacturer.toLowerCase() === lowerAccount;
+        const isMfrTree = isAdmin || root?.manufacturer.toLowerCase() === lowerAccount;
         const visibleUnits = isMfrTree
           ? units.filter((unit) => unit.id === rootId || unit.rootId === rootId)
           : relevant.filter((unit) => unit.rootId === rootId);
@@ -69,7 +73,7 @@ export function InventoryTab({
         };
       })
       .filter((group): group is { root: UnitRecord; partitions: UnitRecord[] } => Boolean(group.root));
-  }, [lowerAccount, units]);
+  }, [isAdmin, lowerAccount, units]);
 
   const toggleExpand = (key: string) => {
     setExpandedUnits((prev) => ({ ...prev, [key]: !prev[key] }));
@@ -113,7 +117,15 @@ export function InventoryTab({
           <EmptyState
             icon={<Package size={28} />}
             title="No Medicine Inventory Records"
-            description="Your connected wallet currently has no active or past medicine custody records."
+            description={
+              isAdmin
+                ? "No medicine batches or inventory records found across the contract."
+                : role.handler
+                ? "You are registered as an authorized Handler. You do not currently have any medicines in your custody or pending transfer. Check 'Transfers' for incoming shipments."
+                : role.manufacturer
+                ? "You are registered as an authorized Manufacturer, but haven't created any medicine batches yet. Go to 'Create Unit' to mint your first batch."
+                : "Your connected wallet currently has no active or past medicine custody records."
+            }
           />
         ) : (
           <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>

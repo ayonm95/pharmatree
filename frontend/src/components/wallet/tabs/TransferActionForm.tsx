@@ -79,7 +79,11 @@ export function TransferActionForm({
         <EmptyState
           icon={<AlertCircle size={28} />}
           title="No Active Inventory in Stock"
-          description="You do not have any active stock units ready for transfer or dispensing."
+          description={
+            canTransact
+              ? "Your account has transfer permissions, but you currently hold 0 active stock units in custody. Receive a batch transfer or create a unit first."
+              : "You do not have active inventory or authorization to initiate transfers."
+          }
         />
       ) : (
         <form onSubmit={handleInitiate} style={{ display: "flex", flexDirection: "column", gap: "var(--space-5)" }}>

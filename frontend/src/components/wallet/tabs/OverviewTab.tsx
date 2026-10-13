@@ -36,16 +36,17 @@ export function OverviewTab({
   const createdRootSummaries = useMemo(() => {
     if (!account) return [];
     return units
-      .filter((unit) => unit.manufacturer.toLowerCase() === lowerAccount && unit.parentId === "0")
+      .filter((unit) => (isAdmin || unit.manufacturer.toLowerCase() === lowerAccount) && unit.parentId === "0")
       .map((root) => {
         const descendants = units.filter((unit) => unit.rootId === root.id && unit.id !== root.id);
         const lineage = [root, ...descendants];
         const totalQuantity = lineage.reduce((sum, unit) => sum + Number(unit.quantity), 0);
         const manufacturerQuantity = lineage
-          .filter((unit) => unit.currentOwner.toLowerCase() === lowerAccount && (unit.status === 0 || unit.status === 3))
+          .filter((unit) => (isAdmin ? (unit.status === 0 || unit.status === 3) : unit.currentOwner.toLowerCase() === lowerAccount && (unit.status === 0 || unit.status === 3)))
           .reduce((sum, unit) => sum + Number(unit.quantity), 0);
         const directDescendants = descendants.filter((unit) => unit.parentId === root.id);
         const partitions = directDescendants.length > 0 ? directDescendants : descendants.filter((unit) =>
+          isAdmin ||
           unit.manufacturer.toLowerCase() === lowerAccount ||
           unit.currentOwner.toLowerCase() === lowerAccount ||
           unit.pendingReceiver.toLowerCase() === lowerAccount
@@ -53,22 +54,22 @@ export function OverviewTab({
         return { root, partitions, totalQuantity, manufacturerQuantity };
       })
       .filter((summary) => summary.totalQuantity > 0);
-  }, [account, lowerAccount, units]);
+  }, [account, isAdmin, lowerAccount, units]);
 
   const ownedUnits = useMemo(
     () =>
       units.filter(
         (unit) =>
-          unit.currentOwner.toLowerCase() === lowerAccount &&
+          (isAdmin || unit.currentOwner.toLowerCase() === lowerAccount) &&
           unit.status !== 2
       ),
-    [lowerAccount, units]
+    [isAdmin, lowerAccount, units]
   );
 
-  const activeCount = units.filter((u) => u.status === 0 && u.currentOwner.toLowerCase() === lowerAccount).length;
-  const pendingCount = units.filter((u) => u.status === 1 && (u.currentOwner.toLowerCase() === lowerAccount || u.pendingReceiver.toLowerCase() === lowerAccount)).length;
-  const soldCount = units.filter((u) => u.status === 2 && u.currentOwner.toLowerCase() === lowerAccount).length;
-  const rejectedCount = units.filter((u) => u.status === 3 && u.currentOwner.toLowerCase() === lowerAccount).length;
+  const activeCount = units.filter((u) => u.status === 0 && (isAdmin || u.currentOwner.toLowerCase() === lowerAccount)).length;
+  const pendingCount = units.filter((u) => u.status === 1 && (isAdmin || u.currentOwner.toLowerCase() === lowerAccount || u.pendingReceiver.toLowerCase() === lowerAccount)).length;
+  const soldCount = units.filter((u) => u.status === 2 && (isAdmin || u.currentOwner.toLowerCase() === lowerAccount)).length;
+  const rejectedCount = units.filter((u) => u.status === 3 && (isAdmin || u.currentOwner.toLowerCase() === lowerAccount)).length;
 
   const toggleExpand = (id: string) => {
     setExpandedUnits((prev) => ({ ...prev, [id]: !prev[id] }));
@@ -117,8 +118,14 @@ export function OverviewTab({
             {createdRootSummaries.length === 0 ? (
               <EmptyState
                 icon={<Factory size={24} />}
-                title="No medicines created"
-                description="Your connected wallet has not registered any root medicine batches yet."
+                title={isAdmin ? "No System Batches Found" : "No Medicines Created"}
+                description={
+                  isAdmin
+                    ? "No medicine batches have been registered in the contract yet."
+                    : role.manufacturer
+                    ? "Your manufacturer wallet has not registered any root medicine batches yet. Create your first batch to begin tracking."
+                    : "Your account is not registered as a manufacturer. Only authorized manufacturers can produce root batches."
+                }
                 actionLabel={canCreateUnit ? "Create First Unit" : undefined}
                 onAction={canCreateUnit ? () => router.push("/create") : undefined}
               />
@@ -297,8 +304,16 @@ export function OverviewTab({
           {ownedUnits.length === 0 ? (
             <EmptyState
               icon={<Package size={24} />}
-              title="No inventory units"
-              description="No active items currently held under your custody."
+              title="No Inventory in Custody"
+              description={
+                isAdmin
+                  ? "No active medicine units found in the system."
+                  : role.handler
+                  ? "You are an authorized Handler, but currently have no medicine units in custody. Check 'Pending Inbound' notifications for incoming transfers."
+                  : role.manufacturer
+                  ? "Your manufacturer wallet has no active units in stock. Create a new batch or review transferred units."
+                  : "No active items currently held under your custody."
+              }
             />
           ) : (
             <div
