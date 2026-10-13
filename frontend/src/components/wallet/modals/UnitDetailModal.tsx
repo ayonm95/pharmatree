@@ -190,12 +190,12 @@ export function UnitDetailModal({
 
           {isOwner && isRejected && onReclaim && (
             <Button
-              variant="outline"
+              variant="primary"
               onClick={() => onReclaim(unit.id)}
               loading={loading}
               icon={<RotateCcw size={16} />}
             >
-              Reclaim Rejected Unit
+              Reclaim Rejected Unit to Active Stock
             </Button>
           )}
 

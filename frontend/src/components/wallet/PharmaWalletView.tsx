@@ -123,7 +123,7 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
           {mode === "create" && <CreateTab account={account} role={role} isAdmin={isAdmin} loading={actions.loading} onCreateMedicine={actions.createMedicine} onConnectWallet={handleConnectWallet} />}
           {mode === "admin" && <AdminTab account={account} role={role} isAdmin={isAdmin} loading={actions.loading} onAssignRole={actions.assignRole} onConnectWallet={handleConnectWallet} />}
           {mode === "transfers" && (isDataLoading && units.length === 0 ? <TransfersSkeleton /> : <TransfersTab account={account} role={role} isAdmin={isAdmin} availableStockUnits={availableStockUnits} pendingTransferUnits={pendingTransferUnits} history={history} units={units} loading={actions.loading} onInitiateTransfer={actions.initiateTransfer} onMarkAsSold={actions.markAsSold} onAcceptTransfer={actions.acceptTransfer} onRejectTransfer={actions.rejectTransfer} onSelectUnitDetail={setModalUnit} />)}
-          {mode === "inventory" && (isDataLoading && units.length === 0 ? <InventorySkeleton /> : <InventoryTab account={account} units={units} history={history} role={role} isAdmin={isAdmin} onOpenQr={setQrUnit} onSelectUnitDetail={setModalUnit} />)}
+          {mode === "inventory" && (isDataLoading && units.length === 0 ? <InventorySkeleton /> : <InventoryTab account={account} units={units} history={history} role={role} isAdmin={isAdmin} onOpenQr={setQrUnit} onSelectUnitDetail={setModalUnit} onReclaim={actions.reclaimUnit} />)}
         </main>
       </div>
 

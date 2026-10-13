@@ -20,6 +20,7 @@ interface InventoryTabProps {
   isAdmin?: boolean;
   onOpenQr: (unit: UnitRecord) => void;
   onSelectUnitDetail: (unit: UnitRecord) => void;
+  onReclaim?: (unitId: string) => Promise<void>;
 }
 
 export function InventoryTab({
@@ -30,6 +31,7 @@ export function InventoryTab({
   isAdmin = false,
   onOpenQr,
   onSelectUnitDetail,
+  onReclaim,
 }: InventoryTabProps) {
   const [expandedUnits, setExpandedUnits] = useState<Record<string, boolean>>({});
 
@@ -409,6 +411,15 @@ export function InventoryTab({
                                       variant={stats.variant}
                                       label={stats.statusText}
                                     />
+                                    {stats.statusText === "Rejected" && part.currentOwner.toLowerCase() === lowerAccount && onReclaim && (
+                                      <Button
+                                        variant="primary"
+                                        size="sm"
+                                        onClick={() => void onReclaim(part.id)}
+                                      >
+                                        Reclaim
+                                      </Button>
+                                    )}
                                     <Button
                                       variant="ghost"
                                       size="sm"
