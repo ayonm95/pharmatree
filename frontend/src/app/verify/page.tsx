@@ -33,6 +33,19 @@ type TimelineEvent = {
   type: "created" | "transferred" | "sold" | "rejected";
 };
 
+const formatAddress = (addr?: string) => {
+  if (!addr || addr === "0x0000000000000000000000000000000000000000") return "-";
+  return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
+};
+
+const formatDate = (timestamp?: number) => {
+  if (!timestamp) return "Recorded on-chain";
+  return new Date(timestamp * 1000).toLocaleString(undefined, {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+};
+
 function VerifyContent() {
   const searchParams = useSearchParams();
   const initialId = searchParams.get("unitId") || "1";
@@ -211,19 +224,6 @@ function VerifyContent() {
       cancelled = true;
     };
   }, [activeUnitId]);
-
-  const formatAddress = (addr?: string) => {
-    if (!addr || addr === "0x0000000000000000000000000000000000000000") return "-";
-    return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
-  };
-
-  const formatDate = (timestamp?: number) => {
-    if (!timestamp) return "Recorded on-chain";
-    return new Date(timestamp * 1000).toLocaleString(undefined, {
-      dateStyle: "medium",
-      timeStyle: "short",
-    });
-  };
 
   const getMedicineName = (metadata?: string) => {
     if (!metadata) return "Medicine";

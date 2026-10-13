@@ -3,14 +3,13 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev",
+    "dev": "next dev -p 3000 -H 0.0.0.0",
     "build": "next build",
-    "start": "next start",
+    "start": "next start -p 3000 -H 0.0.0.0",
     "lint": "eslint"
   },
   "dependencies": {
     "@pinata/sdk": "^2.1.0",
-    "@vercel/analytics": "^2.0.1",
     "ethers": "^6.17.0",
     "next": "16.3.1",
     "pinata": "^2.5.6",

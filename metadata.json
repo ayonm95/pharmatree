@@ -1,0 +1,8 @@
+{
+  "name": "PharmaTree",
+  "description": "Blockchain-powered pharmaceutical supply chain tracking and verification system for medicine provenance, transfer approvals, and inventory control.",
+  "permissions": [],
+  "capabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

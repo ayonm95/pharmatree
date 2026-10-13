@@ -3,15 +3,18 @@
   "version": "1.0.0",
   "private": true,
   "description": "PharmaTree: Blockchain-Based Pharmaceutical Supply Chain Tracking & Verification System",
+  "workspaces": [
+    "frontend"
+  ],
   "scripts": {
-    "dev": "npm --prefix frontend run dev",
-    "build": "npm --prefix frontend run build",
-    "start": "npm --prefix frontend run start",
-    "lint": "npm --prefix frontend run lint",
+    "dev": "npm run dev --workspace=frontend",
+    "build": "npm run build --workspace=frontend",
+    "start": "npm run start --workspace=frontend",
+    "lint": "npm run lint --workspace=frontend",
     "compile": "npm --prefix backend run compile",
     "test": "npm --prefix backend test",
     "test:backend": "npm --prefix backend test",
-    "test:all": "npm --prefix backend test && npm --prefix frontend run build",
+    "test:all": "npm --prefix backend test && npm run build --workspace=frontend",
     "deploy:sepolia": "npm --prefix backend run deploy:sepolia"
   },
   "keywords": [
@@ -25,8 +28,5 @@
     "hardhat"
   ],
   "author": "Ayon Moitra",
-  "license": "MIT",
-  "dependencies": {
-    "@vercel/analytics": "^2.0.1"
-  }
+  "license": "MIT"
 }
