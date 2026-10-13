@@ -68,7 +68,7 @@ export function CreateTab({
   }
 
   return (
-    <div style={{ maxWidth: "720px", display: "flex", flexDirection: "column", gap: "var(--space-6)" }}>
+    <div className="fade-in" style={{ maxWidth: "720px", display: "flex", flexDirection: "column", gap: "var(--space-6)" }}>
       <Card padding="lg">
         <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", marginBottom: "var(--space-6)" }}>
           <div
