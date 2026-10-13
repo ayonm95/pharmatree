@@ -139,21 +139,58 @@ export function InventoryTab({
               const lineage = [unit, ...partitions];
               const totalQuantity = lineage.reduce((sum, c) => sum + Number(c.quantity), 0);
               const mfrAddress = unit.manufacturer.toLowerCase();
-              const currentQuantity = lineage
-                .filter((c) => (c.status === 0 || c.status === 3) && c.currentOwner.toLowerCase() === mfrAddress)
-                .reduce((sum, c) => sum + Number(c.quantity), 0);
-              const hasSoldPortion = lineage.some((c) => c.status === 2);
-              const hasTransferredPortion = lineage.some((c) => c.currentOwner.toLowerCase() !== mfrAddress);
               
-              const batchStatusText = currentQuantity === totalQuantity
-                ? "In stock"
-                : currentQuantity > 0
-                ? "Partially transferred"
-                : hasSoldPortion
-                ? "Sold"
-                : hasTransferredPortion
-                ? "Transferred"
-                : "Active";
+              let currentQuantity: number;
+              let batchStatusText: string;
+
+              if (isMfr || isAdmin) {
+                currentQuantity = lineage
+                  .filter((c) => (c.status === 0 || c.status === 3) && c.currentOwner.toLowerCase() === mfrAddress)
+                  .reduce((sum, c) => sum + Number(c.quantity), 0);
+                const hasSoldPortion = lineage.some((c) => c.status === 2);
+                const hasTransferredPortion = lineage.some((c) => c.currentOwner.toLowerCase() !== mfrAddress);
+
+                batchStatusText = currentQuantity === totalQuantity
+                  ? "In stock"
+                  : currentQuantity > 0
+                  ? "Partially transferred"
+                  : hasSoldPortion
+                  ? "Sold"
+                  : hasTransferredPortion
+                  ? "Transferred"
+                  : "Active";
+              } else {
+                // Connected user is Handler / Custody Holder
+                const ownedQuantity = lineage
+                  .filter((c) => c.status === 0 && c.currentOwner.toLowerCase() === lowerAccount)
+                  .reduce((sum, c) => sum + Number(c.quantity), 0);
+                currentQuantity = ownedQuantity;
+
+                const hasSoldPortion = lineage.some((c) => c.status === 2);
+                const hasTransferredPortion = lineage.some(
+                  (c) => c.currentOwner.toLowerCase() !== lowerAccount && c.status !== 3
+                );
+
+                if (ownedQuantity === totalQuantity && unit.status === 0) {
+                  batchStatusText = "In stock";
+                } else if (ownedQuantity > 0) {
+                  batchStatusText = hasTransferredPortion
+                    ? "Partially transferred"
+                    : hasSoldPortion
+                    ? "Partially sold"
+                    : "In stock";
+                } else if (hasSoldPortion && !hasTransferredPortion) {
+                  batchStatusText = "Sold";
+                } else if (hasTransferredPortion) {
+                  batchStatusText = "Transferred";
+                } else if (unit.status === 1) {
+                  batchStatusText = "Pending transfer";
+                } else if (unit.status === 3) {
+                  batchStatusText = "Rejected";
+                } else {
+                  batchStatusText = "Active";
+                }
+              }
 
               const batchUnitIds = new Set([unit.id, ...partitions.map((p) => p.id)]);
               const unitHistoryLogs = history.filter((h) => batchUnitIds.has(h.id));
@@ -214,7 +251,15 @@ export function InventoryTab({
 
                     <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
                       <StatusBadge
-                        status={batchStatusText === "In stock" ? 0 : batchStatusText === "Sold" ? 2 : 1}
+                        status={
+                          batchStatusText === "In stock" || batchStatusText === "Active"
+                            ? 0
+                            : batchStatusText === "Sold"
+                            ? 2
+                            : batchStatusText === "Rejected"
+                            ? 3
+                            : 1
+                        }
                         label={batchStatusText}
                       />
                     </div>

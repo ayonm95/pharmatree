@@ -240,7 +240,15 @@ export function useWalletActions({
         await refreshData(account, contract);
       } catch (err: any) {
         console.error("reclaimUnit error:", err);
-        notify("Failed to reclaim rejected unit.", "error");
+        const reason = err?.reason || err?.message || "";
+        if (reason.includes("missing revert data") || reason.includes("CALL_EXCEPTION") || reason.includes("reclaimRejectedUnit")) {
+          notify(
+            "Contract Notice: The deployed contract (0x2bAE...) does not support reclaiming. Rejected units remain permanently archived as Rejected on-chain.",
+            "error"
+          );
+        } else {
+          notify("Failed to reclaim rejected unit: " + (err?.shortMessage || err?.message || "Transaction reverted"), "error");
+        }
       } finally {
         setLoading(false);
       }
