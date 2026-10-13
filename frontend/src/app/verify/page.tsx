@@ -14,6 +14,7 @@ import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { CopyableHash } from "@/components/ui/CopyableHash";
+import { Skeleton } from "@/components/ui/Skeleton";
 import { formatAddress, formatDate } from "@/lib/format";
 import {
   AlertTriangle,
@@ -26,7 +27,6 @@ import {
   ArrowLeft,
   ExternalLink,
   History,
-  Activity,
   Plus,
 } from "lucide-react";
 
@@ -411,19 +411,37 @@ function VerifyContent() {
           </Card>
         )}
 
-        {/* Loading Shimmer */}
+        {/* Loading Shimmer Skeleton */}
         {loading && (
-          <Card padding="lg" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "var(--space-3)", padding: "var(--space-8)" }}>
-            <Activity size={28} style={{ color: "var(--color-primary)", animation: "spin 1s linear infinite" }} />
-            <p style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--color-text-muted)", fontWeight: 500 }}>
-              Querying Ethereum Sepolia smart contract...
-            </p>
-          </Card>
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-6)" }} className="fade-in">
+            <Card padding="lg" style={{ display: "flex", alignItems: "flex-start", gap: "var(--space-4)" }}>
+              <Skeleton width="48px" height="48px" borderRadius="var(--radius-pill)" />
+              <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)", flex: 1 }}>
+                <Skeleton width="220px" height="24px" />
+                <Skeleton width="340px" height="16px" />
+                <div style={{ display: "flex", gap: "var(--space-2)", marginTop: "var(--space-2)" }}>
+                  <Skeleton width="90px" height="24px" borderRadius="var(--radius-pill)" />
+                  <Skeleton width="90px" height="24px" borderRadius="var(--radius-pill)" />
+                </div>
+              </div>
+            </Card>
+
+            <Card padding="lg">
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))", gap: "var(--space-4)" }}>
+                {[1, 2, 3, 4].map((i) => (
+                  <div key={i} style={{ display: "flex", flexDirection: "column", gap: "var(--space-1)" }}>
+                    <Skeleton width="80px" height="12px" />
+                    <Skeleton width="140px" height="18px" />
+                  </div>
+                ))}
+              </div>
+            </Card>
+          </div>
         )}
 
         {/* State 2 & 3: Loaded Unit (Authentic OR Flagged/Rejected) */}
         {unit && !loading && (
-          <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-6)" }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-6)" }} className="fade-in">
             {/* Header Verdict Card */}
             <Card
               padding="lg"

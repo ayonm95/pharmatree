@@ -76,7 +76,7 @@ export function OverviewTab({
   };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-6)" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-6)" }} className="fade-in">
       <div
         style={{
           display: "grid",

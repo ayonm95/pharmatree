@@ -19,14 +19,22 @@ import { NotificationsModal } from "./modals/NotificationsModal";
 import { formatAddress } from "@/lib/format";
 import { Bell, Menu, Wallet, AlertTriangle, Plus } from "lucide-react";
 
-const OverviewTab = dynamic(() => import("./tabs/OverviewTab").then((m) => m.OverviewTab));
+import { OverviewSkeleton, InventorySkeleton, TransfersSkeleton } from "./TabSkeletons";
+
+const OverviewTab = dynamic(() => import("./tabs/OverviewTab").then((m) => m.OverviewTab), {
+  loading: () => <OverviewSkeleton />,
+});
 const CreateTab = dynamic(() => import("./tabs/CreateTab").then((m) => m.CreateTab));
 const AdminTab = dynamic(() => import("./tabs/AdminTab").then((m) => m.AdminTab));
-const TransfersTab = dynamic(() => import("./tabs/TransfersTab").then((m) => m.TransfersTab));
-const InventoryTab = dynamic(() => import("./tabs/InventoryTab").then((m) => m.InventoryTab));
+const TransfersTab = dynamic(() => import("./tabs/TransfersTab").then((m) => m.TransfersTab), {
+  loading: () => <TransfersSkeleton />,
+});
+const InventoryTab = dynamic(() => import("./tabs/InventoryTab").then((m) => m.InventoryTab), {
+  loading: () => <InventorySkeleton />,
+});
 
 export function PharmaWalletView({ mode }: { mode: ViewMode }) {
-  const { account, contract, connected, role, isAdmin, units, history, loading: chainLoading, pendingApprovalCount, readonlyContract, connectWallet, loadWalletData } = useChainData();
+  const { account, contract, connected, role, isAdmin, units, history, loading: chainLoading, isDataLoading, pendingApprovalCount, readonlyContract, connectWallet, loadWalletData } = useChainData();
   const { toasts, addToast, removeToast } = useToast();
   const actions = useWalletActions({
     contract, readonlyContract, account, role, isAdmin,
@@ -111,11 +119,11 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
             </div>
           )}
 
-          {mode === "overview" && <OverviewTab account={account} units={units} role={role} isAdmin={isAdmin} canCreateUnit={canCreate} />}
+          {mode === "overview" && (isDataLoading && units.length === 0 ? <OverviewSkeleton /> : <OverviewTab account={account} units={units} role={role} isAdmin={isAdmin} canCreateUnit={canCreate} />)}
           {mode === "create" && <CreateTab account={account} role={role} isAdmin={isAdmin} loading={actions.loading} onCreateMedicine={actions.createMedicine} onConnectWallet={handleConnectWallet} />}
           {mode === "admin" && <AdminTab account={account} role={role} isAdmin={isAdmin} loading={actions.loading} onAssignRole={actions.assignRole} onConnectWallet={handleConnectWallet} />}
-          {mode === "transfers" && <TransfersTab account={account} role={role} availableStockUnits={availableStockUnits} pendingTransferUnits={pendingTransferUnits} history={history} units={units} loading={actions.loading} onInitiateTransfer={actions.initiateTransfer} onMarkAsSold={actions.markAsSold} onAcceptTransfer={actions.acceptTransfer} onRejectTransfer={actions.rejectTransfer} onSelectUnitDetail={setModalUnit} />}
-          {mode === "inventory" && <InventoryTab account={account} units={units} history={history} role={role} isAdmin={isAdmin} onOpenQr={setQrUnit} onSelectUnitDetail={setModalUnit} />}
+          {mode === "transfers" && (isDataLoading && units.length === 0 ? <TransfersSkeleton /> : <TransfersTab account={account} role={role} availableStockUnits={availableStockUnits} pendingTransferUnits={pendingTransferUnits} history={history} units={units} loading={actions.loading} onInitiateTransfer={actions.initiateTransfer} onMarkAsSold={actions.markAsSold} onAcceptTransfer={actions.acceptTransfer} onRejectTransfer={actions.rejectTransfer} onSelectUnitDetail={setModalUnit} />)}
+          {mode === "inventory" && (isDataLoading && units.length === 0 ? <InventorySkeleton /> : <InventoryTab account={account} units={units} history={history} role={role} isAdmin={isAdmin} onOpenQr={setQrUnit} onSelectUnitDetail={setModalUnit} />)}
         </main>
       </div>
 

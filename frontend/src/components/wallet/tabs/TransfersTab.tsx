@@ -45,7 +45,7 @@ export function TransfersTab({
   const visibleHistory = history.filter((entry) => entry.txHash && entry.type !== "CurrentState");
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-6)" }}>
+    <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-6)" }} className="fade-in">
       {/* 1. Pending Transfer Actions */}
       {pendingTransferUnits.length > 0 && (
         <Card padding="md">

@@ -33,6 +33,7 @@ export function useChainData() {
   const [status, setStatus] = useState("Connect your wallet to review the chain");
   const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
   const [loading, setLoading] = useState(false);
+  const [isDataLoading, setIsDataLoading] = useState(true);
   const isConnectingRef = useRef(false);
 
   const readonlyContract = useMemo(
@@ -184,6 +185,7 @@ export function useChainData() {
   }, [fetchUnitActivity]);
 
   const loadWalletData = useCallback(async (walletAddress: string, contractToUse: ethers.Contract = readonlyContract) => {
+    setIsDataLoading(true);
     try {
       const [manufacturer, handler, adminAddress] = await Promise.all([
         contractToUse.isManufacturer(walletAddress),
@@ -264,15 +266,20 @@ export function useChainData() {
         });
     } catch (err) {
       console.error("loadWalletData failed:", err);
+    } finally {
+      setIsDataLoading(false);
     }
   }, [fetchAllUnits, fetchUnitActivity, readonlyContract]);
 
   const refreshReadonlyState = useCallback(async () => {
+    setIsDataLoading(true);
     try {
       const mapped = await fetchAllUnits(readonlyContract);
       setUnits(mapped);
     } catch (error) {
       console.error(error);
+    } finally {
+      setIsDataLoading(false);
     }
   }, [fetchAllUnits, readonlyContract]);
 
@@ -522,6 +529,7 @@ export function useChainData() {
     history,
     status,
     loading,
+    isDataLoading,
     pendingApprovalCount,
     readonlyContract,
     connectWallet,
