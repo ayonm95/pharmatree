@@ -8,9 +8,27 @@ import {
   PHARMA_TREE_ABI,
   PHARMA_TREE_CONTRACT,
   unitLevelToName,
-  unitStatusToName,
 } from "../../lib/pharmaTree";
 import { readonlyProvider } from "../../lib/rpc";
+import { Card } from "@/components/ui/Card";
+import { Button } from "@/components/ui/Button";
+import { StatusBadge } from "@/components/ui/StatusBadge";
+import { CopyableHash } from "@/components/ui/CopyableHash";
+import { formatAddress, formatDate } from "@/lib/format";
+import {
+  AlertTriangle,
+  XCircle,
+  Search,
+  CheckCircle2,
+  Factory,
+  Package,
+  Truck,
+  ArrowLeft,
+  ExternalLink,
+  History,
+  Activity,
+  Plus,
+} from "lucide-react";
 
 type UnitRecord = {
   id: string;
@@ -31,19 +49,6 @@ type TimelineEvent = {
   timestamp?: number;
   txHash?: string;
   type: "created" | "transferred" | "sold" | "rejected";
-};
-
-const formatAddress = (addr?: string) => {
-  if (!addr || addr === "0x0000000000000000000000000000000000000000") return "-";
-  return `${addr.slice(0, 6)}...${addr.slice(-4)}`;
-};
-
-const formatDate = (timestamp?: number) => {
-  if (!timestamp) return "Recorded on-chain";
-  return new Date(timestamp * 1000).toLocaleString(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  });
 };
 
 function VerifyContent() {
@@ -101,7 +106,6 @@ function VerifyContent() {
 
         setUnit(loadedUnit);
 
-        // Fetch logs for timeline
         const events: TimelineEvent[] = [];
         try {
           const latestBlock = await provider.getBlockNumber();
@@ -163,7 +167,7 @@ function VerifyContent() {
               } else if (parsed.name === "UnitSold") {
                 events.push({
                   title: "Dispensed / Sold to Patient",
-                  description: `Marked as sold by retailer/pharmacy ${formatAddress(parsed.args.soldBy || parsed.args[1])}`,
+                  description: `Marked as sold by retailer ${formatAddress(parsed.args.soldBy || parsed.args[1])}`,
                   timestamp: time,
                   txHash: rawLog.transactionHash,
                   type: "sold",
@@ -178,14 +182,13 @@ function VerifyContent() {
                 });
               }
             } catch {
-              // Ignore unparseable log
+              // skip unparseable
             }
           }
         } catch (eventErr) {
           console.warn("Could not load event timeline logs:", eventErr);
         }
 
-        // If no event logs returned (e.g. log window limitations), provide baseline milestone
         if (events.length === 0) {
           events.push({
             title: "Manufactured on Ethereum Sepolia",
@@ -210,7 +213,7 @@ function VerifyContent() {
           setError(
             err.message?.includes("Unit does not exist")
               ? `Unit #${activeUnitId} was not found on the blockchain.`
-              : "Could not retrieve unit details. Please check the Unit ID or your network connection."
+              : `Could not find Unit #${activeUnitId}. Verify the ID or check network connectivity.`
           );
         }
       } finally {
@@ -227,7 +230,7 @@ function VerifyContent() {
 
   const getMedicineName = (metadata?: string) => {
     if (!metadata) return "Medicine";
-    return metadata.split(",")[0].trim() || metadata;
+    return metadata.split(",")[0]?.trim() || metadata;
   };
 
   const handleSearch = (e: React.FormEvent) => {
@@ -238,538 +241,472 @@ function VerifyContent() {
     }
   };
 
+  const isRejected = unit?.status === 3;
+
   return (
-    <div style={styles.pageWrap}>
+    <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", backgroundColor: "var(--color-bg-page)" }}>
       {/* Top Header */}
-      <header style={styles.header}>
-        <div style={styles.brand}>
-          <span style={styles.logoCross}>✚</span>
-          <span style={styles.brandTitle}>PHARMATREE VERIFY</span>
-        </div>
-        <Link href="/" style={styles.navLink}>
-          Back to Dashboard →
+      <header
+        style={{
+          height: "64px",
+          borderBottom: "1px solid var(--color-border-default)",
+          backgroundColor: "var(--color-bg-surface)",
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          padding: "0 var(--space-4)",
+          position: "sticky",
+          top: 0,
+          zIndex: "var(--z-sticky)",
+        }}
+      >
+        <Link href="/" style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+          <div
+            style={{
+              width: "32px",
+              height: "32px",
+              borderRadius: "var(--radius-control)",
+              backgroundColor: "var(--color-primary)",
+              color: "#fff",
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+            aria-hidden="true"
+          >
+            <Plus size={18} strokeWidth={3} />
+          </div>
+          <span style={{ fontSize: "var(--text-base)", fontWeight: 800, letterSpacing: "-0.02em", color: "var(--color-text-main)" }}>
+            PHARMATREE VERIFY
+          </span>
+        </Link>
+
+        <Link
+          href="/"
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            gap: "var(--space-2)",
+            minHeight: "44px",
+            padding: "0 var(--space-3)",
+            borderRadius: "var(--radius-control)",
+            border: "1px solid var(--color-border-default)",
+            backgroundColor: "var(--color-bg-surface)",
+            fontSize: "var(--text-xs)",
+            fontWeight: 600,
+            color: "var(--color-text-main)",
+            transition: "all var(--transition-fast)",
+          }}
+        >
+          <ArrowLeft size={16} />
+          <span>Dashboard</span>
         </Link>
       </header>
 
       {/* Main Container */}
-      <main style={styles.main}>
-        {/* Search / Lookup Bar */}
-        <section style={styles.searchSection}>
-          <h1 style={styles.mainHeading}>Public Medicine Provenance Verification</h1>
-          <p style={styles.subHeading}>
-            Verify genuine pharmaceutical authenticity, container custody, and manufacturer origin directly from the Ethereum Sepolia blockchain.
+      <main
+        id="main-content"
+        style={{
+          flex: 1,
+          maxWidth: "880px",
+          margin: "0 auto",
+          width: "100%",
+          padding: "var(--space-8) var(--space-4)",
+          display: "flex",
+          flexDirection: "column",
+          gap: "var(--space-6)",
+        }}
+      >
+        {/* Search Header */}
+        <section style={{ textAlign: "center", display: "flex", flexDirection: "column", alignItems: "center", gap: "var(--space-3)" }}>
+          <h1 style={{ margin: 0, fontSize: "var(--text-2xl)", fontWeight: 800, color: "var(--color-text-main)", letterSpacing: "-0.02em" }}>
+            Public Medicine Provenance Verification
+          </h1>
+          <p style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--color-text-muted)", maxWidth: "580px" }}>
+            Verify pharmaceutical authenticity, container custody, and manufacturer origin directly from the immutable Ethereum Sepolia ledger.
           </p>
 
-          <form onSubmit={handleSearch} style={styles.searchForm}>
-            <div style={styles.inputWrapper}>
-              <span style={styles.searchIcon}>🔍</span>
+          <form
+            onSubmit={handleSearch}
+            style={{
+              width: "100%",
+              maxWidth: "480px",
+              display: "flex",
+              gap: "var(--space-2)",
+              marginTop: "var(--space-2)",
+            }}
+          >
+            <div style={{ position: "relative", flex: 1 }}>
+              <Search
+                size={18}
+                style={{
+                  position: "absolute",
+                  left: "14px",
+                  top: "50%",
+                  transform: "translateY(-50%)",
+                  color: "var(--color-text-muted)",
+                }}
+              />
               <input
                 type="number"
                 min="1"
                 placeholder="Enter Unit ID (e.g. 1)"
                 value={inputUnitId}
                 onChange={(e) => setInputUnitId(e.target.value)}
-                style={styles.searchInput}
+                style={{
+                  width: "100%",
+                  height: "44px",
+                  padding: "0 var(--space-4) 0 42px",
+                  borderRadius: "var(--radius-control)",
+                  border: "1px solid var(--color-border-default)",
+                  backgroundColor: "var(--color-bg-surface)",
+                  fontSize: "var(--text-sm)",
+                  color: "var(--color-text-main)",
+                }}
               />
             </div>
-            <button type="submit" style={styles.searchBtn} disabled={loading}>
-              {loading ? "Verifying..." : "Verify Unit"}
-            </button>
+            <Button
+              type="submit"
+              variant="primary"
+              size="md"
+              loading={loading}
+              disabled={loading || !inputUnitId.trim()}
+            >
+              Verify Unit
+            </Button>
           </form>
         </section>
 
-        {/* Verification Status Banner */}
+        {/* State 1: Error / Not Found */}
         {error && (
-          <div style={styles.errorBox}>
-            <span style={{ fontSize: "24px" }}>⚠️</span>
-            <div>
-              <h3 style={{ margin: "0 0 4px 0", color: "#991b1b" }}>Verification Notice</h3>
-              <p style={{ margin: 0, color: "#b91c1c" }}>{error}</p>
+          <Card padding="lg" style={{ border: "1px solid var(--color-danger-border)", backgroundColor: "var(--color-danger-subtle)" }}>
+            <div style={{ display: "flex", alignItems: "flex-start", gap: "var(--space-4)" }}>
+              <div
+                style={{
+                  width: "44px",
+                  height: "44px",
+                  borderRadius: "var(--radius-pill)",
+                  backgroundColor: "#fee2e2",
+                  color: "var(--color-danger)",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  flexShrink: 0,
+                }}
+              >
+                <XCircle size={26} />
+              </div>
+              <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-1)" }}>
+                <h2 style={{ margin: 0, fontSize: "var(--text-base)", fontWeight: 700, color: "var(--color-danger)" }}>
+                  Unit Record Not Found
+                </h2>
+                <p style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--color-text-main)" }}>
+                  {error}
+                </p>
+                <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", marginTop: "var(--space-1)" }}>
+                  Confirm you scanned or entered the exact numerical identifier printed on the packaging QR code.
+                </span>
+              </div>
             </div>
-          </div>
+          </Card>
         )}
 
+        {/* Loading Shimmer */}
         {loading && (
-          <div style={styles.loadingBox}>
-            <div style={styles.spinner} />
-            <p style={{ color: "#475569", fontWeight: 500 }}>Querying Ethereum Sepolia smart contract...</p>
-          </div>
+          <Card padding="lg" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: "var(--space-3)", padding: "var(--space-8)" }}>
+            <Activity size={28} style={{ color: "var(--color-primary)", animation: "spin 1s linear infinite" }} />
+            <p style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--color-text-muted)", fontWeight: 500 }}>
+              Querying Ethereum Sepolia smart contract...
+            </p>
+          </Card>
         )}
 
+        {/* State 2 & 3: Loaded Unit (Authentic OR Flagged/Rejected) */}
         {unit && !loading && (
-          <div style={styles.contentGrid}>
-            {/* Authenticity Card */}
-            <section style={styles.card}>
-              <div style={styles.verifiedBanner}>
-                <div style={styles.checkCircle}>✓</div>
-                <div>
-                  <h2 style={styles.verifiedTitle}>Verified Authentic Pharmaceutical</h2>
-                  <p style={styles.verifiedSubtitle}>
-                    Immutable proof of manufacture registered on Ethereum Sepolia
+          <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-6)" }}>
+            {/* Header Verdict Card */}
+            <Card
+              padding="lg"
+              style={{
+                border: isRejected ? "1px solid var(--color-danger-border)" : "1px solid var(--color-success-border)",
+                backgroundColor: isRejected ? "var(--color-danger-subtle)" : "var(--color-success-subtle)",
+              }}
+            >
+              <div style={{ display: "flex", alignItems: "flex-start", gap: "var(--space-4)" }}>
+                <div
+                  style={{
+                    width: "48px",
+                    height: "48px",
+                    borderRadius: "var(--radius-pill)",
+                    backgroundColor: isRejected ? "#fee2e2" : "#dcfce7",
+                    color: isRejected ? "var(--color-danger)" : "var(--color-success)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    flexShrink: 0,
+                  }}
+                >
+                  {isRejected ? <AlertTriangle size={28} /> : <CheckCircle2 size={28} />}
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                  <h2
+                    style={{
+                      margin: 0,
+                      fontSize: "var(--text-lg)",
+                      fontWeight: 800,
+                      color: isRejected ? "var(--color-danger)" : "var(--color-success)",
+                    }}
+                  >
+                    {isRejected ? "Custody Flagged / Transfer Rejected" : "Verified Authentic Pharmaceutical"}
+                  </h2>
+                  <p style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--color-text-main)" }}>
+                    {isRejected
+                      ? "This medicine unit was rejected by a downstream handler during transit or inspection. Returned to sender."
+                      : "Cryptographically verified on Ethereum Sepolia. Direct unbroken provenance from certified manufacturer."}
                   </p>
                 </div>
               </div>
+            </Card>
 
-              <div style={styles.detailGrid}>
-                <div style={styles.detailItem}>
-                  <span style={styles.detailLabel}>Medicine Name</span>
-                  <span style={styles.detailValueBold}>{getMedicineName(unit.metadata)}</span>
-                </div>
-
-                <div style={styles.detailItem}>
-                  <span style={styles.detailLabel}>Active Tablet Count</span>
-                  <span style={styles.detailValueBold}>{unit.quantity} tablets</span>
-                </div>
-
-                <div style={styles.detailItem}>
-                  <span style={styles.detailLabel}>Packaging Level</span>
-                  <span style={styles.detailValue}>{unitLevelToName(unit.level)}</span>
-                </div>
-
-                <div style={styles.detailItem}>
-                  <span style={styles.detailLabel}>Current Supply Status</span>
-                  <span style={{
-                    ...styles.statusBadge,
-                    backgroundColor: unit.status === 2 ? "#dcfce7" : unit.status === 1 ? "#fef3c7" : "#e0f2fe",
-                    color: unit.status === 2 ? "#15803d" : unit.status === 1 ? "#b45309" : "#0369a1",
-                  }}>
-                    ● {unitStatusToName(unit.status)}
+            {/* Batch Specifications Grid */}
+            <Card padding="md">
+              <h3 style={{ margin: "0 0 var(--space-4) 0", fontSize: "var(--text-base)", fontWeight: 700, color: "var(--color-text-main)" }}>
+                Batch Specifications
+              </h3>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+                  gap: "var(--space-4)",
+                  fontSize: "var(--text-sm)",
+                }}
+              >
+                <div>
+                  <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", display: "block" }}>
+                    Product Name
                   </span>
+                  <strong style={{ fontSize: "var(--text-base)", color: "var(--color-text-main)" }}>
+                    {getMedicineName(unit.metadata)}
+                  </strong>
                 </div>
 
-                <div style={styles.detailItem}>
-                  <span style={styles.detailLabel}>Unit Identification</span>
-                  <span style={styles.detailValue}>Unit #{unit.id} {unit.parentId !== "0" && `(Child of #${unit.parentId})`}</span>
+                <div>
+                  <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", display: "block" }}>
+                    Tablet / Unit Count
+                  </span>
+                  <strong style={{ fontSize: "var(--text-base)", color: "var(--color-text-main)", fontVariantNumeric: "tabular-nums" }}>
+                    {unit.quantity} units
+                  </strong>
                 </div>
 
-                <div style={styles.detailItem}>
-                  <span style={styles.detailLabel}>Smart Contract</span>
+                <div>
+                  <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", display: "block" }}>
+                    Packaging Classification
+                  </span>
+                  <strong style={{ color: "var(--color-text-main)" }}>
+                    {unitLevelToName(unit.level)}
+                  </strong>
+                </div>
+
+                <div>
+                  <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", display: "block" }}>
+                    On-Chain State
+                  </span>
+                  <div style={{ marginTop: "4px" }}>
+                    <StatusBadge status={unit.status} />
+                  </div>
+                </div>
+
+                <div>
+                  <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", display: "block" }}>
+                    Unit Identifier
+                  </span>
+                  <strong style={{ color: "var(--color-text-main)", fontFamily: "var(--font-mono)" }}>
+                    Unit #{unit.id} {unit.parentId !== "0" && `(Child of #${unit.parentId})`}
+                  </strong>
+                </div>
+
+                <div>
+                  <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", display: "block" }}>
+                    Verified Contract
+                  </span>
                   <a
                     href={`https://sepolia.etherscan.io/address/${PHARMA_TREE_CONTRACT}`}
                     target="_blank"
                     rel="noreferrer"
-                    style={styles.etherscanLink}
+                    style={{
+                      display: "inline-flex",
+                      alignItems: "center",
+                      gap: "4px",
+                      color: "var(--color-primary)",
+                      fontWeight: 600,
+                      fontFamily: "var(--font-mono)",
+                    }}
                   >
-                    {formatAddress(PHARMA_TREE_CONTRACT)} ↗
+                    <span>{formatAddress(PHARMA_TREE_CONTRACT)}</span>
+                    <ExternalLink size={13} />
                   </a>
                 </div>
               </div>
-            </section>
+            </Card>
 
-            {/* Custody Parties */}
-            <section style={styles.card}>
-              <h3 style={styles.cardSectionTitle}>Custody & Authorization</h3>
-              <div style={styles.partyRow}>
-                <div style={styles.partyIcon}>🏭</div>
-                <div style={{ flex: 1 }}>
-                  <span style={styles.partyRole}>Verified Manufacturer</span>
-                  <a
-                    href={`https://sepolia.etherscan.io/address/${unit.manufacturer}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    style={styles.etherscanLink}
-                  >
-                    {unit.manufacturer} ↗
-                  </a>
-                </div>
-              </div>
-
-              <div style={styles.partyRow}>
-                <div style={styles.partyIcon}>📦</div>
-                <div style={{ flex: 1 }}>
-                  <span style={styles.partyRole}>Current Registered Owner</span>
-                  <a
-                    href={`https://sepolia.etherscan.io/address/${unit.currentOwner}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    style={styles.etherscanLink}
-                  >
-                    {unit.currentOwner} ↗
-                  </a>
-                </div>
-              </div>
-
-              {unit.status === 1 && unit.pendingReceiver !== ethers.ZeroAddress && (
-                <div style={{ ...styles.partyRow, backgroundColor: "#fffbeb", borderColor: "#fde68a" }}>
-                  <div style={styles.partyIcon}>🚚</div>
-                  <div style={{ flex: 1 }}>
-                    <span style={{ ...styles.partyRole, color: "#b45309" }}>Pending Transfer Receiver</span>
-                    <a
-                      href={`https://sepolia.etherscan.io/address/${unit.pendingReceiver}`}
-                      target="_blank"
-                      rel="noreferrer"
-                      style={{ ...styles.etherscanLink, color: "#b45309" }}
-                    >
-                      {unit.pendingReceiver} ↗
-                    </a>
+            {/* Custody Parties Card */}
+            <Card padding="md">
+              <h3 style={{ margin: "0 0 var(--space-4) 0", fontSize: "var(--text-base)", fontWeight: 700, color: "var(--color-text-main)" }}>
+                Custody & Parties
+              </h3>
+              <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "var(--space-3)",
+                    padding: "var(--space-3)",
+                    border: "1px solid var(--color-border-subtle)",
+                    borderRadius: "var(--radius-control)",
+                    backgroundColor: "var(--color-bg-subtle)",
+                  }}
+                >
+                  <Factory size={20} style={{ color: "var(--color-primary)", flexShrink: 0 }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", display: "block" }}>
+                      Certified Manufacturer
+                    </span>
+                    <CopyableHash hash={unit.manufacturer} />
                   </div>
                 </div>
-              )}
-            </section>
 
-            {/* Blockchain Audit Trail */}
-            <section style={styles.card}>
-              <h3 style={styles.cardSectionTitle}>Chronological Chain of Custody</h3>
-              <div style={styles.timelineList}>
-                {timeline.map((event, idx) => (
-                  <div key={idx} style={styles.timelineItem}>
-                    <div style={styles.timelineDot(event.type)}>
-                      {event.type === "created" ? "✓" : event.type === "sold" ? "★" : "→"}
+                <div
+                  style={{
+                    display: "flex",
+                    alignItems: "center",
+                    gap: "var(--space-3)",
+                    padding: "var(--space-3)",
+                    border: "1px solid var(--color-border-subtle)",
+                    borderRadius: "var(--radius-control)",
+                    backgroundColor: "var(--color-bg-subtle)",
+                  }}
+                >
+                  <Package size={20} style={{ color: "var(--color-primary)", flexShrink: 0 }} />
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", display: "block" }}>
+                      Current Registered Custodian
+                    </span>
+                    <CopyableHash hash={unit.currentOwner} />
+                  </div>
+                </div>
+
+                {unit.pendingReceiver && unit.pendingReceiver !== "0x0000000000000000000000000000000000000000" && (
+                  <div
+                    style={{
+                      display: "flex",
+                      alignItems: "center",
+                      gap: "var(--space-3)",
+                      padding: "var(--space-3)",
+                      border: "1px solid var(--color-warning-border)",
+                      borderRadius: "var(--radius-control)",
+                      backgroundColor: "var(--color-warning-subtle)",
+                    }}
+                  >
+                    <Truck size={20} style={{ color: "var(--color-warning)", flexShrink: 0 }} />
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <span style={{ fontSize: "var(--text-xs)", color: "var(--color-warning)", display: "block", fontWeight: 600 }}>
+                        Pending Transfer Receiver
+                      </span>
+                      <CopyableHash hash={unit.pendingReceiver} />
                     </div>
-                    <div style={styles.timelineBody}>
-                      <div style={styles.timelineHeaderRow}>
-                        <strong style={styles.timelineTitle}>{event.title}</strong>
-                        <span style={styles.timelineTime}>{formatDate(event.timestamp)}</span>
-                      </div>
-                      <p style={styles.timelineDesc}>{event.description}</p>
-                      {event.txHash && (
+                  </div>
+                )}
+              </div>
+            </Card>
+
+            {/* Chain of Custody Timeline */}
+            <Card padding="md">
+              <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", marginBottom: "var(--space-4)" }}>
+                <History size={18} style={{ color: "var(--color-primary)" }} />
+                <h3 style={{ margin: 0, fontSize: "var(--text-base)", fontWeight: 700, color: "var(--color-text-main)" }}>
+                  Chain of Custody Timeline
+                </h3>
+              </div>
+
+              <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)", paddingLeft: "var(--space-2)" }}>
+                {timeline.map((evt, idx) => (
+                  <div
+                    key={idx}
+                    style={{
+                      display: "flex",
+                      gap: "var(--space-3)",
+                      position: "relative",
+                    }}
+                  >
+                    <div
+                      style={{
+                        width: "10px",
+                        height: "10px",
+                        borderRadius: "var(--radius-pill)",
+                        backgroundColor:
+                          evt.type === "rejected"
+                            ? "var(--color-danger)"
+                            : evt.type === "sold"
+                            ? "var(--color-success)"
+                            : "var(--color-primary)",
+                        marginTop: "5px",
+                        flexShrink: 0,
+                      }}
+                    />
+                    <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                      <strong style={{ fontSize: "var(--text-sm)", color: "var(--color-text-main)" }}>
+                        {evt.title}
+                      </strong>
+                      <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
+                        {evt.description}
+                      </span>
+                      {evt.timestamp && (
+                        <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", fontVariantNumeric: "tabular-nums" }}>
+                          {formatDate(evt.timestamp)}
+                        </span>
+                      )}
+                      {evt.txHash && (
                         <a
-                          href={`https://sepolia.etherscan.io/tx/${event.txHash}`}
+                          href={`https://sepolia.etherscan.io/tx/${evt.txHash}`}
                           target="_blank"
                           rel="noreferrer"
-                          style={styles.txLink}
+                          style={{
+                            display: "inline-flex",
+                            alignItems: "center",
+                            gap: "4px",
+                            fontSize: "var(--text-xs)",
+                            color: "var(--color-primary)",
+                            fontFamily: "var(--font-mono)",
+                            marginTop: "2px",
+                          }}
                         >
-                          View Transaction on Etherscan ({formatAddress(event.txHash)}) ↗
+                          <span>tx: {formatAddress(evt.txHash)}</span>
+                          <ExternalLink size={11} />
                         </a>
                       )}
                     </div>
                   </div>
                 ))}
               </div>
-            </section>
+            </Card>
           </div>
         )}
       </main>
-
-      <footer style={styles.footer}>
-        <p style={{ margin: 0 }}>PharmaTree · Immutable Provenance Verification Engine · Powered by Ethereum</p>
-      </footer>
     </div>
   );
 }
 
 export default function VerifyPage() {
   return (
-    <Suspense fallback={<div style={{ padding: "40px", textAlign: "center" }}>Loading verification engine...</div>}>
+    <Suspense
+      fallback={
+        <div style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center" }}>
+          Loading verification service...
+        </div>
+      }
+    >
       <VerifyContent />
     </Suspense>
   );
 }
-
-const styles = {
-  pageWrap: {
-    minHeight: "100vh",
-    backgroundColor: "#f8fafc",
-    fontFamily: 'Inter, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-    color: "#0f172a",
-    display: "flex",
-    flexDirection: "column" as const,
-  },
-  header: {
-    padding: "16px 28px",
-    backgroundColor: "#ffffff",
-    borderBottom: "1px solid #e2e8f0",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-  },
-  brand: {
-    display: "flex",
-    alignItems: "center",
-    gap: "10px",
-  },
-  logoCross: {
-    backgroundColor: "#0d9488",
-    color: "#ffffff",
-    width: "28px",
-    height: "28px",
-    borderRadius: "6px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontWeight: "bold",
-    fontSize: "18px",
-  },
-  brandTitle: {
-    fontWeight: 800,
-    fontSize: "18px",
-    letterSpacing: "-0.02em",
-    color: "#0f172a",
-  },
-  navLink: {
-    fontSize: "14px",
-    color: "#0d9488",
-    textDecoration: "none",
-    fontWeight: 600,
-  },
-  main: {
-    maxWidth: "840px",
-    width: "100%",
-    margin: "0 auto",
-    padding: "36px 20px 60px",
-    flex: 1,
-  },
-  searchSection: {
-    textAlign: "center" as const,
-    marginBottom: "32px",
-  },
-  mainHeading: {
-    fontSize: "28px",
-    fontWeight: 800,
-    letterSpacing: "-0.025em",
-    color: "#0f172a",
-    margin: "0 0 8px 0",
-  },
-  subHeading: {
-    fontSize: "15px",
-    color: "#64748b",
-    margin: "0 0 24px 0",
-    lineHeight: 1.5,
-  },
-  searchForm: {
-    display: "flex",
-    gap: "10px",
-    maxWidth: "500px",
-    margin: "0 auto",
-  },
-  inputWrapper: {
-    position: "relative" as const,
-    flex: 1,
-  },
-  searchIcon: {
-    position: "absolute" as const,
-    left: "14px",
-    top: "50%",
-    transform: "translateY(-50%)",
-    color: "#94a3b8",
-  },
-  searchInput: {
-    width: "100%",
-    padding: "12px 14px 12px 40px",
-    borderRadius: "10px",
-    border: "1px solid #cbd5e1",
-    fontSize: "15px",
-    outline: "none",
-    backgroundColor: "#ffffff",
-    boxShadow: "0 1px 2px rgba(0,0,0,0.05)",
-  },
-  searchBtn: {
-    padding: "12px 22px",
-    backgroundColor: "#0d9488",
-    color: "#ffffff",
-    fontWeight: 600,
-    fontSize: "15px",
-    borderRadius: "10px",
-    border: "none",
-    cursor: "pointer",
-    boxShadow: "0 1px 3px rgba(13,148,136,0.25)",
-  },
-  errorBox: {
-    display: "flex",
-    gap: "14px",
-    alignItems: "center",
-    padding: "16px 20px",
-    backgroundColor: "#fef2f2",
-    border: "1px solid #fecaca",
-    borderRadius: "12px",
-    marginBottom: "24px",
-  },
-  loadingBox: {
-    textAlign: "center" as const,
-    padding: "48px 0",
-  },
-  spinner: {
-    width: "36px",
-    height: "36px",
-    border: "3px solid #e2e8f0",
-    borderTopColor: "#0d9488",
-    borderRadius: "50%",
-    margin: "0 auto 16px auto",
-    animation: "spin 0.8s linear infinite",
-  },
-  contentGrid: {
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: "24px",
-  },
-  card: {
-    backgroundColor: "#ffffff",
-    borderRadius: "16px",
-    border: "1px solid #e2e8f0",
-    padding: "24px 28px",
-    boxShadow: "0 2px 8px rgba(15,23,42,0.04)",
-  },
-  verifiedBanner: {
-    display: "flex",
-    alignItems: "center",
-    gap: "16px",
-    padding: "16px 20px",
-    backgroundColor: "#f0fdf4",
-    border: "1px solid #bbf7d0",
-    borderRadius: "12px",
-    marginBottom: "24px",
-  },
-  checkCircle: {
-    width: "36px",
-    height: "36px",
-    borderRadius: "50%",
-    backgroundColor: "#16a34a",
-    color: "#ffffff",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontWeight: "bold",
-    fontSize: "20px",
-  },
-  verifiedTitle: {
-    margin: "0 0 2px 0",
-    fontSize: "17px",
-    fontWeight: 700,
-    color: "#15803d",
-  },
-  verifiedSubtitle: {
-    margin: 0,
-    fontSize: "13px",
-    color: "#166534",
-  },
-  detailGrid: {
-    display: "grid",
-    gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
-    gap: "18px 24px",
-  },
-  detailItem: {
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: "4px",
-  },
-  detailLabel: {
-    fontSize: "12px",
-    textTransform: "uppercase" as const,
-    fontWeight: 600,
-    color: "#64748b",
-    letterSpacing: "0.05em",
-  },
-  detailValue: {
-    fontSize: "15px",
-    color: "#1e293b",
-  },
-  detailValueBold: {
-    fontSize: "16px",
-    fontWeight: 700,
-    color: "#0f172a",
-  },
-  statusBadge: {
-    display: "inline-flex",
-    alignItems: "center",
-    gap: "6px",
-    padding: "3px 10px",
-    borderRadius: "999px",
-    fontSize: "13px",
-    fontWeight: 600,
-    width: "fit-content",
-  },
-  cardSectionTitle: {
-    fontSize: "17px",
-    fontWeight: 700,
-    color: "#0f172a",
-    margin: "0 0 16px 0",
-    borderBottom: "1px solid #f1f5f9",
-    paddingBottom: "10px",
-  },
-  partyRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: "14px",
-    padding: "12px 16px",
-    backgroundColor: "#f8fafc",
-    borderRadius: "10px",
-    border: "1px solid #e2e8f0",
-    marginBottom: "10px",
-  },
-  partyIcon: {
-    fontSize: "22px",
-  },
-  partyRole: {
-    display: "block",
-    fontSize: "11px",
-    textTransform: "uppercase" as const,
-    fontWeight: 700,
-    color: "#64748b",
-    letterSpacing: "0.04em",
-    marginBottom: "2px",
-  },
-  etherscanLink: {
-    fontSize: "13px",
-    color: "#0d9488",
-    textDecoration: "none",
-    fontWeight: 500,
-    wordBreak: "break-all" as const,
-  },
-  timelineList: {
-    position: "relative" as const,
-    paddingLeft: "24px",
-    borderLeft: "2px solid #e2e8f0",
-    marginLeft: "12px",
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: "24px",
-  },
-  timelineItem: {
-    position: "relative" as const,
-  },
-  timelineDot: (type: TimelineEvent["type"]) => ({
-    position: "absolute" as const,
-    left: "-33px",
-    top: "2px",
-    width: "20px",
-    height: "20px",
-    borderRadius: "50%",
-    backgroundColor: type === "sold" ? "#16a34a" : type === "created" ? "#0d9488" : "#3b82f6",
-    color: "#ffffff",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    fontSize: "11px",
-    fontWeight: "bold",
-    boxShadow: "0 0 0 4px #ffffff",
-  }),
-  timelineBody: {
-    display: "flex",
-    flexDirection: "column" as const,
-    gap: "4px",
-  },
-  timelineHeaderRow: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    gap: "8px",
-    flexWrap: "wrap" as const,
-  },
-  timelineTitle: {
-    fontSize: "15px",
-    color: "#0f172a",
-  },
-  timelineTime: {
-    fontSize: "12px",
-    color: "#64748b",
-  },
-  timelineDesc: {
-    margin: 0,
-    fontSize: "13px",
-    color: "#475569",
-  },
-  txLink: {
-    fontSize: "12px",
-    color: "#0d9488",
-    textDecoration: "none",
-    fontWeight: 500,
-  },
-  footer: {
-    padding: "24px",
-    textAlign: "center" as const,
-    color: "#94a3b8",
-    fontSize: "13px",
-    borderTop: "1px solid #e2e8f0",
-    backgroundColor: "#ffffff",
-  },
-};

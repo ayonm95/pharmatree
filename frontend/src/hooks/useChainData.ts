@@ -1,0 +1,439 @@
+"use client";
+
+import { useEffect, useMemo, useState, useCallback, useRef } from "react";
+import { ethers } from "ethers";
+import {
+  PHARMA_TREE_ABI,
+  PHARMA_TREE_CHAIN_ID,
+  PHARMA_TREE_CONTRACT,
+} from "@/lib/pharmaTree";
+import { readonlyProvider } from "@/lib/rpc";
+import { withRpcRetry } from "./useRpcRetry";
+import { UnitRecord, HistoryEntry, UnitActivity } from "@/types/pharmatree";
+
+const WALLET_STORAGE_KEY = "pharmatree-wallet-address";
+const EVENT_QUERY_WINDOW = 9_000;
+const DEFAULT_EVENT_LOOKBACK = 10_000;
+const ACTIVITY_CACHE_TTL = 30_000;
+
+let activityCache: { expiresAt: number; value: Record<string, UnitActivity> } | null = null;
+let activityRequest: Promise<Record<string, UnitActivity>> | null = null;
+
+export function useChainData() {
+  const [account, setAccount] = useState("");
+  const [contract, setContract] = useState<ethers.Contract | null>(null);
+  const [connected, setConnected] = useState(false);
+  const [role, setRole] = useState<{ manufacturer: boolean; handler: boolean }>({
+    manufacturer: false,
+    handler: false,
+  });
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [units, setUnits] = useState<UnitRecord[]>([]);
+  const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [status, setStatus] = useState("Connect your wallet to review the chain");
+  const [pendingApprovalCount, setPendingApprovalCount] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const isConnectingRef = useRef(false);
+
+  const readonlyContract = useMemo(
+    () => new ethers.Contract(PHARMA_TREE_CONTRACT, PHARMA_TREE_ABI, readonlyProvider),
+    []
+  );
+
+  const fetchUnitActivity = useCallback(async (contractInstance: ethers.Contract): Promise<Record<string, UnitActivity>> => {
+    if (activityCache && activityCache.expiresAt > Date.now()) return activityCache.value;
+    if (activityRequest) return activityRequest;
+
+    activityRequest = (async () => {
+      try {
+        const activity: Record<string, UnitActivity> = {};
+        const latestBlock = await withRpcRetry(() => readonlyProvider.getBlockNumber());
+        const configuredStart = Number(process.env.NEXT_PUBLIC_DEPLOYMENT_BLOCK || "11683269");
+        const fromBlock = configuredStart > 0
+          ? configuredStart
+          : Math.max(0, latestBlock - DEFAULT_EVENT_LOOKBACK);
+
+        const logs: ethers.Log[] = [];
+        for (let start = fromBlock; start <= latestBlock; start += EVENT_QUERY_WINDOW) {
+          const end = Math.min(start + EVENT_QUERY_WINDOW - 1, latestBlock);
+          logs.push(...await withRpcRetry(() => readonlyProvider.getLogs({
+            address: PHARMA_TREE_CONTRACT,
+            fromBlock: start,
+            toBlock: end,
+          })));
+        }
+
+        const blockTimes = new Map<number, number>();
+        const uniqueBlockNumbers = Array.from(new Set(logs.map((l) => l.blockNumber)));
+        await Promise.all(
+          uniqueBlockNumbers.slice(0, 30).map(async (bNum) => {
+            try {
+              const block = await withRpcRetry(() => readonlyProvider.getBlock(bNum));
+              if (block) blockTimes.set(bNum, Number(block.timestamp));
+            } catch {
+              blockTimes.set(bNum, Math.floor(Date.now() / 1000));
+            }
+          })
+        );
+
+        for (const rawLog of logs) {
+          try {
+            const parsed = contractInstance.interface.parseLog(rawLog);
+            if (!parsed || !parsed.args) continue;
+            const log = { ...rawLog, args: parsed.args, fragment: parsed.fragment };
+            const id = String(log.args[0]);
+            const current = activity[id] ?? {};
+            const timestamp = blockTimes.get(log.blockNumber) ?? Math.floor(Date.now() / 1000);
+
+            if (log.fragment?.name === "UnitCreated") current.createdAt = timestamp;
+            if (log.fragment?.name === "TransferInitiated") {
+              current.initiatedAt = timestamp;
+              current.initiatedFrom = String(log.args.from || log.args[1] || "");
+              current.initiatedTo = String(log.args.to || log.args[2] || "");
+            }
+            if (log.fragment?.name === "TransferCompleted") {
+              current.acceptedAt = timestamp;
+              current.acceptedFrom = String(log.args.from || log.args[1] || "");
+              current.acceptedTo = String(log.args.to || log.args[2] || "");
+            }
+            if (log.fragment?.name === "TransferRejected") {
+              current.rejectedAt = timestamp;
+              current.rejectedFrom = String(log.args.from || log.args[1] || "");
+              current.rejectedBy = String(log.args.rejectedBy || log.args[2] || "");
+            }
+            if (log.fragment?.name === "UnitSold") current.soldAt = timestamp;
+
+            activity[id] = current;
+          } catch {
+            // Ignore unparseable log
+          }
+        }
+
+        activityCache = { expiresAt: Date.now() + ACTIVITY_CACHE_TTL, value: activity };
+        return activity;
+      } catch (err) {
+        console.warn("fetchUnitActivity failed:", err);
+        return {};
+      }
+    })();
+
+    try {
+      return await activityRequest;
+    } finally {
+      activityRequest = null;
+    }
+  }, []);
+
+  const fetchAllUnits = useCallback(async (contractInstance: ethers.Contract): Promise<UnitRecord[]> => {
+    try {
+      const count = await contractInstance.unitCounter();
+      const countNum = Number(count);
+      if (countNum <= 0) return [];
+
+      const promises: Promise<UnitRecord | null>[] = [];
+      for (let index = 1; index <= countNum; index++) {
+        promises.push(
+          contractInstance.getUnitDetails(BigInt(index))
+            .then((detail: any) => ({
+              id: String(index),
+              displayId: String(index),
+              parentId: String(detail[0]),
+              rootId: String(detail[1]),
+              level: Number(detail[2]),
+              manufacturer: detail[3],
+              currentOwner: detail[4],
+              pendingReceiver: detail[5],
+              status: Number(detail[6]),
+              quantity: String(detail[7]),
+              metadata: detail[8],
+              ownerLabel: detail[4],
+            } as UnitRecord))
+            .catch((error: any) => {
+              console.warn(`Unable to read unit ${index}`, error);
+              return null;
+            })
+        );
+      }
+
+      const results = await Promise.all(promises);
+      const unitsList: UnitRecord[] = results.filter((u): u is UnitRecord => u !== null);
+
+      const childrenSeen: Record<string, number> = {};
+      const byId = new Map(unitsList.map((unit) => [unit.id, unit]));
+      for (const unit of unitsList) {
+        if (unit.parentId === "0") continue;
+        childrenSeen[unit.rootId] = (childrenSeen[unit.rootId] ?? 0) + 1;
+        const root = byId.get(unit.rootId);
+        unit.displayId = `${root?.displayId ?? unit.rootId}.${childrenSeen[unit.rootId]}`;
+      }
+
+      void fetchUnitActivity(contractInstance)
+        .then((activity) => {
+          if (!activity || Object.keys(activity).length === 0) return;
+          setUnits((prev) =>
+            prev.map((unit) => (activity && activity[unit.id] ? { ...unit, ...activity[unit.id] } : unit))
+          );
+        })
+        .catch(() => {});
+
+      return unitsList;
+    } catch (err) {
+      console.warn("fetchAllUnits error:", err);
+      return [];
+    }
+  }, [fetchUnitActivity]);
+
+  const loadWalletData = useCallback(async (walletAddress: string, contractToUse: ethers.Contract = readonlyContract) => {
+    try {
+      const [manufacturer, handler, adminAddress] = await Promise.all([
+        contractToUse.isManufacturer(walletAddress),
+        contractToUse.isHandler(walletAddress),
+        contractToUse.admin(),
+      ]);
+      setRole({ manufacturer, handler });
+      setIsAdmin(adminAddress.toLowerCase() === walletAddress.toLowerCase());
+
+      const allUnits = await fetchAllUnits(contractToUse);
+      const activity = await fetchUnitActivity(contractToUse);
+      const enrichedUnits = allUnits.map((unit) =>
+        activity && activity[unit.id] ? { ...unit, ...activity[unit.id] } : unit
+      );
+
+      const unitDetails = enrichedUnits.filter((unit) => {
+        const lowerWallet = walletAddress.toLowerCase();
+        return (
+          unit.manufacturer.toLowerCase() === lowerWallet ||
+          unit.currentOwner.toLowerCase() === lowerWallet ||
+          unit.pendingReceiver.toLowerCase() === lowerWallet ||
+          unit.rejectedBy?.toLowerCase() === lowerWallet ||
+          unit.initiatedTo?.toLowerCase() === lowerWallet
+        );
+      });
+
+      const pendingIncoming = unitDetails.filter(
+        (unit) => unit.pendingReceiver.toLowerCase() === walletAddress.toLowerCase() && unit.status === 1
+      );
+
+      const syntheticHistory: HistoryEntry[] = enrichedUnits.flatMap((unit) => {
+        const entries: HistoryEntry[] = [];
+        if (unit.status === 3 || unit.rejectedAt) {
+          entries.push({
+            id: unit.id,
+            type: "TransferRejected",
+            from: unit.rejectedFrom || unit.manufacturer,
+            to: unit.rejectedBy,
+            rejectedBy: unit.rejectedBy,
+            txHash: "rejected",
+            blockNumber: 0,
+            timestamp: unit.rejectedAt ?? unit.createdAt,
+            quantity: unit.quantity,
+          });
+        }
+        if (unit.status === 1 || unit.initiatedAt) {
+          const toTarget =
+            unit.pendingReceiver !== "0x0000000000000000000000000000000000000000"
+              ? unit.pendingReceiver
+              : unit.initiatedTo;
+          entries.push({
+            id: unit.id,
+            type: "TransferInitiated",
+            from: unit.initiatedFrom || unit.manufacturer,
+            to: toTarget,
+            txHash: "initiated",
+            blockNumber: 0,
+            timestamp: unit.initiatedAt ?? unit.createdAt,
+            quantity: unit.quantity,
+          });
+        }
+        if (unit.acceptedAt) {
+          entries.push({
+            id: unit.id,
+            type: "TransferCompleted",
+            from: unit.acceptedFrom || unit.manufacturer,
+            to: unit.acceptedTo || unit.currentOwner,
+            txHash: "completed",
+            blockNumber: 0,
+            timestamp: unit.acceptedAt,
+            quantity: unit.quantity,
+          });
+        }
+        return entries;
+      });
+
+      setUnits(enrichedUnits);
+      setHistory(syntheticHistory);
+      setPendingApprovalCount(pendingIncoming.length);
+    } catch (err) {
+      console.error("loadWalletData failed:", err);
+    }
+  }, [fetchAllUnits, fetchUnitActivity, readonlyContract]);
+
+  const refreshReadonlyState = useCallback(async () => {
+    try {
+      const mapped = await fetchAllUnits(readonlyContract);
+      setUnits(mapped);
+    } catch (error) {
+      console.error(error);
+    }
+  }, [fetchAllUnits, readonlyContract]);
+
+  const getEthereumProvider = () => {
+    if (typeof window === "undefined") return null;
+    const anyWin = window as any;
+    if (!anyWin.ethereum) return null;
+    if (Array.isArray(anyWin.ethereum.providers)) {
+      const mm = anyWin.ethereum.providers.find((p: any) => p.isMetaMask);
+      if (mm) return mm;
+    }
+    return anyWin.ethereum;
+  };
+
+  const connectWallet = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
+    if (isConnectingRef.current) return;
+    const provider = getEthereumProvider();
+    if (!provider) {
+      if (!silent) {
+        setStatus("MetaMask is not detected. Please install or enable MetaMask.");
+      }
+      return;
+    }
+
+    try {
+      isConnectingRef.current = true;
+      setLoading(true);
+
+      let walletAddress: string | null = null;
+      const accounts = (await provider.request({ method: "eth_accounts" })) as string[];
+      if (accounts && accounts.length > 0) {
+        walletAddress = accounts[0];
+      } else if (!silent) {
+        const requested = (await provider.request({ method: "eth_requestAccounts" })) as string[];
+        if (requested && requested.length > 0) {
+          walletAddress = requested[0];
+        }
+      }
+
+      if (!walletAddress) {
+        if (!silent) setStatus("Please select an account in MetaMask to connect.");
+        return;
+      }
+
+      const browserProvider = new ethers.BrowserProvider(provider);
+      let network = await browserProvider.getNetwork();
+
+      if (network.chainId !== PHARMA_TREE_CHAIN_ID) {
+        try {
+          await provider.request({
+            method: "wallet_switchEthereumChain",
+            params: [{ chainId: `0x${PHARMA_TREE_CHAIN_ID.toString(16)}` }],
+          });
+          network = await browserProvider.getNetwork();
+        } catch (switchError: any) {
+          console.warn("Chain switch request failed", switchError);
+          const msg = `Please switch MetaMask to Sepolia (Chain ${PHARMA_TREE_CHAIN_ID.toString()}).`;
+          setStatus(msg);
+          return;
+        }
+      }
+
+      if (network.chainId !== PHARMA_TREE_CHAIN_ID) {
+        setStatus(`Switch MetaMask to chain ${PHARMA_TREE_CHAIN_ID.toString()} before using PharmaTree.`);
+        return;
+      }
+
+      const signer = await browserProvider.getSigner(walletAddress);
+      const signerContract = new ethers.Contract(PHARMA_TREE_CONTRACT, PHARMA_TREE_ABI, signer);
+
+      setContract(signerContract);
+      setAccount(walletAddress);
+      setConnected(true);
+      localStorage.setItem(WALLET_STORAGE_KEY, walletAddress);
+      setStatus(`Connected as ${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}.`);
+
+      await loadWalletData(walletAddress, readonlyContract);
+    } catch (error: any) {
+      console.error("Wallet connection error:", error);
+      if (!silent) {
+        let message = "Wallet connection failed.";
+        if (error?.code === 4001) message = "Connection rejected in MetaMask.";
+        else if (error?.code === -32002) message = "Connection request already open in MetaMask.";
+        else if (error?.message) message = error.message.slice(0, 100);
+        setStatus(message);
+      }
+    } finally {
+      isConnectingRef.current = false;
+      setLoading(false);
+    }
+  }, [loadWalletData, readonlyContract]);
+
+  useEffect(() => {
+    void refreshReadonlyState();
+  }, [refreshReadonlyState]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const provider = getEthereumProvider();
+    if (!provider) return;
+
+    const autoConnect = async () => {
+      try {
+        const accounts = (await provider.request({ method: "eth_accounts" })) as string[];
+        if (accounts && accounts.length > 0) {
+          await connectWallet({ silent: true });
+        }
+      } catch (error) {
+        console.warn("Auto-connect failed", error);
+      }
+    };
+
+    void autoConnect();
+
+    const handleAccountsChanged = (accounts: string[]) => {
+      if (!accounts || accounts.length === 0) {
+        setAccount("");
+        setConnected(false);
+        setRole({ manufacturer: false, handler: false });
+        setIsAdmin(false);
+        setPendingApprovalCount(0);
+        setHistory([]);
+        setUnits([]);
+        window.localStorage.removeItem(WALLET_STORAGE_KEY);
+        setStatus("Wallet disconnected");
+        return;
+      }
+      window.localStorage.setItem(WALLET_STORAGE_KEY, accounts[0]);
+      void connectWallet({ silent: true });
+    };
+
+    const handleChainChanged = () => {
+      window.location.reload();
+    };
+
+    provider.on("accountsChanged", handleAccountsChanged);
+    provider.on("chainChanged", handleChainChanged);
+
+    return () => {
+      if (provider.removeListener) {
+        provider.removeListener("accountsChanged", handleAccountsChanged);
+        provider.removeListener("chainChanged", handleChainChanged);
+      }
+    };
+  }, [connectWallet]);
+
+  return {
+    account,
+    contract,
+    connected,
+    role,
+    isAdmin,
+    units,
+    history,
+    status,
+    loading,
+    pendingApprovalCount,
+    readonlyContract,
+    connectWallet,
+    refreshReadonlyState,
+    loadWalletData,
+  };
+}
