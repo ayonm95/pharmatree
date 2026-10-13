@@ -153,7 +153,8 @@ export function InventoryTab({
                 ? "Transferred"
                 : "Active";
 
-              const unitHistoryLogs = history.filter((h) => h.id === unit.id);
+              const batchUnitIds = new Set([unit.id, ...partitions.map((p) => p.id)]);
+              const unitHistoryLogs = history.filter((h) => batchUnitIds.has(h.id));
 
               return (
                 <div
@@ -306,24 +307,62 @@ export function InventoryTab({
                             Custody History
                           </span>
                           <div style={{ display: "flex", flexDirection: "column", gap: "6px" }}>
-                            {unitHistoryLogs.map((log, idx) => (
-                              <div
-                                key={idx}
-                                style={{
-                                  display: "flex",
-                                  justifyContent: "space-between",
-                                  fontSize: "var(--text-xs)",
-                                  fontFamily: "var(--font-mono)",
-                                }}
-                              >
-                                <span style={{ color: log.type === "TransferRejected" ? "var(--color-danger)" : "var(--color-text-main)", fontWeight: 600 }}>
-                                  {log.type === "TransferRejected" ? "Transfer Rejected" : log.type}
-                                </span>
-                                <span style={{ color: "var(--color-text-muted)" }}>
-                                  {log.from ? `${log.from.slice(0, 6)}...` : ""} {"->"} {log.to ? `${log.to.slice(0, 6)}...` : ""}
-                                </span>
-                              </div>
-                            ))}
+                            {unitHistoryLogs.map((log, idx) => {
+                              const logUnit = units.find((u) => u.id === log.id);
+                              const displayId = logUnit?.displayId || log.id;
+                              const isReject = log.type === "TransferRejected";
+                              const typeLabel = isReject
+                                ? "Transfer Rejected"
+                                : log.type === "TransferInitiated"
+                                ? "Transfer Initiated"
+                                : log.type === "TransferCompleted"
+                                ? "Transfer Accepted"
+                                : log.type === "UnitSold"
+                                ? "Dispensed / Sold"
+                                : log.type === "UnitCreated"
+                                ? "Unit Created"
+                                : log.type;
+
+                              return (
+                                <div
+                                  key={`${log.id}-${log.txHash}-${idx}`}
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "space-between",
+                                    fontSize: "var(--text-xs)",
+                                    padding: "var(--space-1) 0",
+                                    borderBottom: "1px dashed var(--color-border-subtle)",
+                                  }}
+                                >
+                                  <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+                                    <strong style={{ fontFamily: "var(--font-mono)", color: "var(--color-text-muted)" }}>
+                                      #{displayId}
+                                    </strong>
+                                    <span
+                                      style={{
+                                        color: isReject ? "var(--color-danger)" : "var(--color-text-main)",
+                                        fontWeight: 600,
+                                      }}
+                                    >
+                                      {typeLabel}
+                                    </span>
+                                  </div>
+                                  <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", color: "var(--color-text-muted)", fontFamily: "var(--font-mono)" }}>
+                                    {log.from && (
+                                      <span>
+                                        {log.from.slice(0, 6)}... {isReject ? "x" : "->"} {(log.rejectedBy || log.to || "").slice(0, 6)}...
+                                      </span>
+                                    )}
+                                    {log.timestamp && (
+                                      <span style={{ fontSize: "11px", color: "var(--color-text-subtle)" }}>
+                                        {formatDate(log.timestamp)}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              );
+                            })}
                           </div>
                         </div>
                       )}

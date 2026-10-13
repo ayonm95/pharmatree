@@ -15,8 +15,18 @@ const WALLET_STORAGE_KEY = "pharmatree-wallet-address";
 const DEFAULT_EVENT_LOOKBACK = 10_000;
 const ACTIVITY_CACHE_TTL = 30_000;
 
-let activityCache: { expiresAt: number; value: Record<string, UnitActivity> } | null = null;
-let activityRequest: Promise<Record<string, UnitActivity>> | null = null;
+type ActivityResult = {
+  activity: Record<string, UnitActivity>;
+  historyLogs: HistoryEntry[];
+};
+
+let activityCache: { expiresAt: number; value: ActivityResult } | null = null;
+let activityRequest: Promise<ActivityResult> | null = null;
+
+export function invalidateChainActivityCache() {
+  activityCache = null;
+  activityRequest = null;
+}
 
 export function useChainData() {
   const [account, setAccount] = useState("");
@@ -40,13 +50,14 @@ export function useChainData() {
     []
   );
 
-  const fetchUnitActivity = useCallback(async (contractInstance: ethers.Contract): Promise<Record<string, UnitActivity>> => {
+  const fetchUnitActivity = useCallback(async (contractInstance: ethers.Contract): Promise<ActivityResult> => {
     if (activityCache && activityCache.expiresAt > Date.now()) return activityCache.value;
     if (activityRequest) return activityRequest;
 
-    activityRequest = (async () => {
+    activityRequest = (async (): Promise<ActivityResult> => {
       try {
         const activity: Record<string, UnitActivity> = {};
+        const historyLogs: HistoryEntry[] = [];
         const latestBlock = await withRpcRetry(() => readonlyProvider.getBlockNumber());
         const configuredStart = Number(process.env.NEXT_PUBLIC_DEPLOYMENT_BLOCK || "11683269");
         const fromBlock = configuredStart > 0
@@ -93,36 +104,74 @@ export function useChainData() {
             const id = String(log.args[0]);
             const current = activity[id] ?? {};
             const timestamp = blockTimes.get(log.blockNumber) ?? Math.floor(Date.now() / 1000);
+            const eventName = log.fragment?.name;
 
-            if (log.fragment?.name === "UnitCreated") current.createdAt = timestamp;
-            if (log.fragment?.name === "TransferInitiated") {
+            let from = "";
+            let to = "";
+            let rejectedBy: string | undefined = undefined;
+
+            if (eventName === "UnitCreated") {
+              current.createdAt = timestamp;
+              from = String(log.args.owner || log.args[3] || "");
+              to = from;
+            } else if (eventName === "TransferInitiated") {
               current.initiatedAt = timestamp;
               current.initiatedFrom = String(log.args.from || log.args[1] || "");
               current.initiatedTo = String(log.args.to || log.args[2] || "");
-            }
-            if (log.fragment?.name === "TransferCompleted") {
+              from = current.initiatedFrom;
+              to = current.initiatedTo;
+            } else if (eventName === "TransferCompleted") {
               current.acceptedAt = timestamp;
               current.acceptedFrom = String(log.args.from || log.args[1] || "");
               current.acceptedTo = String(log.args.to || log.args[2] || "");
-            }
-            if (log.fragment?.name === "TransferRejected") {
+              from = current.acceptedFrom;
+              to = current.acceptedTo;
+            } else if (eventName === "TransferRejected") {
               current.rejectedAt = timestamp;
               current.rejectedFrom = String(log.args.from || log.args[1] || "");
               current.rejectedBy = String(log.args.rejectedBy || log.args[2] || "");
+              from = current.rejectedFrom;
+              rejectedBy = current.rejectedBy;
+              to = current.rejectedBy;
+            } else if (eventName === "UnitSold") {
+              current.soldAt = timestamp;
+              from = String(log.args.soldBy || log.args[1] || "");
+            } else if (eventName === "TransferCancelled") {
+              from = String(log.args.cancelledBy || log.args[1] || "");
+            } else if (eventName === "UnitReclaimed") {
+              from = String(log.args.reclaimedBy || log.args[1] || "");
             }
-            if (log.fragment?.name === "UnitSold") current.soldAt = timestamp;
 
             activity[id] = current;
+
+            if (eventName) {
+              historyLogs.push({
+                id,
+                type: eventName,
+                from,
+                to,
+                rejectedBy,
+                txHash: rawLog.transactionHash,
+                blockNumber: rawLog.blockNumber,
+                timestamp,
+              });
+            }
           } catch {
             // Ignore unparseable log
           }
         }
 
-        activityCache = { expiresAt: Date.now() + ACTIVITY_CACHE_TTL, value: activity };
-        return activity;
+        historyLogs.sort((a, b) => {
+          if (b.blockNumber !== a.blockNumber) return b.blockNumber - a.blockNumber;
+          return (b.timestamp ?? 0) - (a.timestamp ?? 0);
+        });
+
+        const result: ActivityResult = { activity, historyLogs };
+        activityCache = { expiresAt: Date.now() + ACTIVITY_CACHE_TTL, value: result };
+        return result;
       } catch (err) {
         console.warn("fetchUnitActivity failed:", err);
-        return {};
+        return { activity: {}, historyLogs: [] };
       }
     })();
 
@@ -177,11 +226,17 @@ export function useChainData() {
       }
 
       void fetchUnitActivity(contractInstance)
-        .then((activity) => {
-          if (!activity || Object.keys(activity).length === 0) return;
-          setUnits((prev) =>
-            prev.map((unit) => (activity && activity[unit.id] ? { ...unit, ...activity[unit.id] } : unit))
-          );
+        .then((res) => {
+          if (!res) return;
+          const { activity, historyLogs } = res;
+          if (activity && Object.keys(activity).length > 0) {
+            setUnits((prev) =>
+              prev.map((unit) => (activity && activity[unit.id] ? { ...unit, ...activity[unit.id] } : unit))
+            );
+          }
+          if (historyLogs && historyLogs.length > 0) {
+            setHistory(historyLogs);
+          }
         })
         .catch(() => {});
 
@@ -215,59 +270,75 @@ export function useChainData() {
 
       // Hydrate historical logs asynchronously in the background without blocking active inventory
       void fetchUnitActivity(contractToUse)
-        .then((activity) => {
-          if (!activity || Object.keys(activity).length === 0) return;
+        .then((res) => {
+          if (!res) return;
+          const { activity, historyLogs } = res;
           const enrichedUnits = allUnits.map((unit) =>
             activity && activity[unit.id] ? { ...unit, ...activity[unit.id] } : unit
           );
           setUnits(enrichedUnits);
 
-          const syntheticHistory: HistoryEntry[] = enrichedUnits.flatMap((unit) => {
-            const entries: HistoryEntry[] = [];
-            if (unit.status === 3 || unit.rejectedAt) {
-              entries.push({
-                id: unit.id,
-                type: "TransferRejected",
-                from: unit.rejectedFrom || unit.manufacturer,
-                to: unit.rejectedBy,
-                rejectedBy: unit.rejectedBy,
-                txHash: "rejected",
-                blockNumber: 0,
-                timestamp: unit.rejectedAt ?? unit.createdAt,
-                quantity: unit.quantity,
-              });
-            }
-            if (unit.status === 1 || unit.initiatedAt) {
-              const toTarget =
-                unit.pendingReceiver !== "0x0000000000000000000000000000000000000000"
-                  ? unit.pendingReceiver
-                  : unit.initiatedTo;
-              entries.push({
-                id: unit.id,
-                type: "TransferInitiated",
-                from: unit.initiatedFrom || unit.manufacturer,
-                to: toTarget,
-                txHash: "initiated",
-                blockNumber: 0,
-                timestamp: unit.initiatedAt ?? unit.createdAt,
-                quantity: unit.quantity,
-              });
-            }
-            if (unit.acceptedAt) {
-              entries.push({
-                id: unit.id,
-                type: "TransferCompleted",
-                from: unit.acceptedFrom || unit.manufacturer,
-                to: unit.acceptedTo || unit.currentOwner,
-                txHash: "completed",
-                blockNumber: 0,
-                timestamp: unit.acceptedAt,
-                quantity: unit.quantity,
-              });
-            }
-            return entries;
-          });
-          setHistory(syntheticHistory);
+          if (historyLogs && historyLogs.length > 0) {
+            setHistory(historyLogs);
+          } else {
+            const syntheticHistory: HistoryEntry[] = enrichedUnits.flatMap((unit) => {
+              const entries: HistoryEntry[] = [];
+              if (unit.status === 3 || unit.rejectedAt) {
+                entries.push({
+                  id: unit.id,
+                  type: "TransferRejected",
+                  from: unit.rejectedFrom || unit.manufacturer,
+                  to: unit.rejectedBy,
+                  rejectedBy: unit.rejectedBy,
+                  txHash: "rejected",
+                  blockNumber: 0,
+                  timestamp: unit.rejectedAt ?? unit.createdAt,
+                  quantity: unit.quantity,
+                });
+              }
+              if (unit.status === 1) {
+                const toTarget =
+                  unit.pendingReceiver !== "0x0000000000000000000000000000000000000000"
+                    ? unit.pendingReceiver
+                    : unit.initiatedTo;
+                entries.push({
+                  id: unit.id,
+                  type: "TransferInitiated",
+                  from: unit.initiatedFrom || unit.manufacturer,
+                  to: toTarget,
+                  txHash: "initiated",
+                  blockNumber: 0,
+                  timestamp: unit.initiatedAt ?? unit.createdAt,
+                  quantity: unit.quantity,
+                });
+              }
+              if (unit.acceptedAt || (unit.status === 0 && unit.parentId !== "0")) {
+                entries.push({
+                  id: unit.id,
+                  type: "TransferCompleted",
+                  from: unit.acceptedFrom || unit.manufacturer,
+                  to: unit.acceptedTo || unit.currentOwner,
+                  txHash: "completed",
+                  blockNumber: 0,
+                  timestamp: unit.acceptedAt ?? unit.createdAt,
+                  quantity: unit.quantity,
+                });
+              }
+              if (unit.status === 2 || unit.soldAt) {
+                entries.push({
+                  id: unit.id,
+                  type: "UnitSold",
+                  from: unit.currentOwner || unit.manufacturer,
+                  txHash: "sold",
+                  blockNumber: 0,
+                  timestamp: unit.soldAt ?? unit.createdAt,
+                  quantity: unit.quantity,
+                });
+              }
+              return entries;
+            });
+            setHistory(syntheticHistory);
+          }
         })
         .catch((activityErr) => {
           console.warn("Background activity fetch failed (non-critical):", activityErr);
