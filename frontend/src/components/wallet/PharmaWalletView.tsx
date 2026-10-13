@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useMemo } from "react";
+import React, { useState, useMemo, useCallback } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { ViewMode, UnitRecord } from "@/types/pharmatree";
@@ -45,6 +45,15 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
   const availableStockUnits = useMemo(() => units.filter((u) => u.status === 0 && u.currentOwner.toLowerCase() === lowerAccount), [lowerAccount, units]);
   const canCreate = Boolean(account) && (role.manufacturer || isAdmin);
 
+  const handleConnectWallet = useCallback(async () => {
+    const res = await connectWallet();
+    if (!res.success && res.error) {
+      addToast(res.error, "error");
+    } else if (res.success && res.account) {
+      addToast(`Connected to MetaMask (${formatAddress(res.account)})`, "success");
+    }
+  }, [connectWallet, addToast]);
+
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", backgroundColor: "var(--color-bg-page)" }}>
       <header style={{ height: "64px", borderBottom: "1px solid var(--color-border-default)", backgroundColor: "var(--color-bg-surface)", display: "flex", alignItems: "center", justifyContent: "space-between", padding: "0 var(--space-4)", position: "sticky", top: 0, zIndex: "var(--z-sticky)" }}>
@@ -61,7 +70,7 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
         </div>
 
         <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
-          <Button variant={connected ? "outline" : "primary"} size="sm" onClick={() => void connectWallet()} loading={chainLoading} icon={<Wallet size={16} />}>
+          <Button variant={connected ? "outline" : "primary"} size="sm" onClick={() => void handleConnectWallet()} loading={chainLoading} icon={<Wallet size={16} />}>
             {connected ? formatAddress(account) : "Connect Wallet"}
           </Button>
           <button type="button" onClick={() => setNotifOpen(true)} aria-label={`Pending approvals: ${pendingIncoming.length}`} style={{ minWidth: "44px", minHeight: "44px", position: "relative", display: "flex", alignItems: "center", justifyContent: "center", borderRadius: "var(--radius-control)", border: "1px solid var(--color-border-default)", background: "var(--color-bg-surface)", cursor: "pointer", color: "var(--color-text-muted)" }}>
@@ -103,8 +112,8 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
           )}
 
           {mode === "overview" && <OverviewTab account={account} units={units} role={role} isAdmin={isAdmin} canCreateUnit={canCreate} />}
-          {mode === "create" && <CreateTab account={account} role={role} isAdmin={isAdmin} loading={actions.loading} onCreateMedicine={actions.createMedicine} onConnectWallet={connectWallet} />}
-          {mode === "admin" && <AdminTab account={account} role={role} isAdmin={isAdmin} loading={actions.loading} onAssignRole={actions.assignRole} onConnectWallet={connectWallet} />}
+          {mode === "create" && <CreateTab account={account} role={role} isAdmin={isAdmin} loading={actions.loading} onCreateMedicine={actions.createMedicine} onConnectWallet={handleConnectWallet} />}
+          {mode === "admin" && <AdminTab account={account} role={role} isAdmin={isAdmin} loading={actions.loading} onAssignRole={actions.assignRole} onConnectWallet={handleConnectWallet} />}
           {mode === "transfers" && <TransfersTab account={account} role={role} availableStockUnits={availableStockUnits} pendingTransferUnits={pendingTransferUnits} history={history} units={units} loading={actions.loading} onInitiateTransfer={actions.initiateTransfer} onMarkAsSold={actions.markAsSold} onAcceptTransfer={actions.acceptTransfer} onRejectTransfer={actions.rejectTransfer} onSelectUnitDetail={setModalUnit} />}
           {mode === "inventory" && <InventoryTab account={account} units={units} history={history} role={role} isAdmin={isAdmin} onOpenQr={setQrUnit} onSelectUnitDetail={setModalUnit} />}
         </main>

@@ -281,90 +281,169 @@ export function useChainData() {
     if (typeof window === "undefined") return null;
     const anyWin = window as any;
     if (!anyWin.ethereum) return null;
+
     if (Array.isArray(anyWin.ethereum.providers)) {
-      const mm = anyWin.ethereum.providers.find((p: any) => p.isMetaMask);
-      if (mm) return mm;
+      // Find authentic MetaMask provider (not hijacked by Phantom, Coinbase, Brave, etc.)
+      const metamask = anyWin.ethereum.providers.find(
+        (p: any) => p.isMetaMask && !p.isPhantom && !p.isCoinbaseWallet && !p.isBraveWallet
+      );
+      if (metamask) return metamask;
+      const fallbackMetaMask = anyWin.ethereum.providers.find((p: any) => p.isMetaMask);
+      if (fallbackMetaMask) return fallbackMetaMask;
+      return anyWin.ethereum.providers[0];
     }
+
     return anyWin.ethereum;
   };
 
-  const connectWallet = useCallback(async ({ silent = false }: { silent?: boolean } = {}) => {
-    if (isConnectingRef.current) return;
-    const provider = getEthereumProvider();
-    if (!provider) {
-      if (!silent) {
-        setStatus("MetaMask is not detected. Please install or enable MetaMask.");
+  const connectWallet = useCallback(
+    async ({ silent = false }: { silent?: boolean } = {}): Promise<{
+      success: boolean;
+      account?: string;
+      error?: string;
+    }> => {
+      if (isConnectingRef.current) {
+        return { success: false, error: "Connection request already in progress." };
       }
-      return;
-    }
 
-    try {
-      isConnectingRef.current = true;
-      setLoading(true);
+      const provider = getEthereumProvider();
+      if (!provider) {
+        const errorMsg = "MetaMask is not detected. Please install the MetaMask browser extension and refresh.";
+        if (!silent) setStatus(errorMsg);
+        return { success: false, error: errorMsg };
+      }
 
-      let walletAddress: string | null = null;
-      const accounts = (await provider.request({ method: "eth_accounts" })) as string[];
-      if (accounts && accounts.length > 0) {
-        walletAddress = accounts[0];
-      } else if (!silent) {
-        const requested = (await provider.request({ method: "eth_requestAccounts" })) as string[];
-        if (requested && requested.length > 0) {
-          walletAddress = requested[0];
+      try {
+        isConnectingRef.current = true;
+        setLoading(true);
+
+        let walletAddress: string | null = null;
+
+        if (silent) {
+          const accounts = (await provider.request({ method: "eth_accounts" })) as string[];
+          if (accounts && accounts.length > 0) {
+            walletAddress = accounts[0];
+          }
+        } else {
+          try {
+            const requested = (await provider.request({ method: "eth_requestAccounts" })) as string[];
+            if (requested && requested.length > 0) {
+              walletAddress = requested[0];
+            }
+          } catch (reqErr: any) {
+            if (reqErr?.code === -32002) {
+              const msg = "MetaMask connection request is already open. Please open your MetaMask extension popup.";
+              setStatus(msg);
+              return { success: false, error: msg };
+            }
+            if (reqErr?.code === 4001) {
+              const msg = "Connection request was rejected in MetaMask.";
+              setStatus(msg);
+              return { success: false, error: msg };
+            }
+            throw reqErr;
+          }
         }
-      }
 
-      if (!walletAddress) {
-        if (!silent) setStatus("Please select an account in MetaMask to connect.");
-        return;
-      }
-
-      const browserProvider = new ethers.BrowserProvider(provider);
-      let network = await browserProvider.getNetwork();
-
-      if (network.chainId !== PHARMA_TREE_CHAIN_ID) {
-        try {
-          await provider.request({
-            method: "wallet_switchEthereumChain",
-            params: [{ chainId: `0x${PHARMA_TREE_CHAIN_ID.toString(16)}` }],
-          });
-          network = await browserProvider.getNetwork();
-        } catch (switchError: any) {
-          console.warn("Chain switch request failed", switchError);
-          const msg = `Please switch MetaMask to Sepolia (Chain ${PHARMA_TREE_CHAIN_ID.toString()}).`;
-          setStatus(msg);
-          return;
+        if (!walletAddress) {
+          if (!silent) {
+            const msg = "No account selected. Please unlock or select an account in MetaMask.";
+            setStatus(msg);
+            return { success: false, error: msg };
+          }
+          return { success: false };
         }
-      }
 
-      if (network.chainId !== PHARMA_TREE_CHAIN_ID) {
-        setStatus(`Switch MetaMask to chain ${PHARMA_TREE_CHAIN_ID.toString()} before using PharmaTree.`);
-        return;
-      }
+        // Verify and switch network via direct EIP-1193 calls (avoids ethers v6 cached NETWORK_ERROR)
+        const targetChainHex = `0x${PHARMA_TREE_CHAIN_ID.toString(16)}`;
+        let currentChainHex = (await provider.request({ method: "eth_chainId" })) as string;
 
-      const signer = await browserProvider.getSigner(walletAddress);
-      const signerContract = new ethers.Contract(PHARMA_TREE_CONTRACT, PHARMA_TREE_ABI, signer);
+        if (BigInt(currentChainHex) !== PHARMA_TREE_CHAIN_ID) {
+          try {
+            await provider.request({
+              method: "wallet_switchEthereumChain",
+              params: [{ chainId: targetChainHex }],
+            });
+          } catch (switchError: any) {
+            const errorCode = switchError?.code || switchError?.data?.originalError?.code;
+            if (
+              errorCode === 4902 ||
+              switchError?.message?.includes("4902") ||
+              switchError?.message?.toLowerCase().includes("unrecognized chain")
+            ) {
+              try {
+                await provider.request({
+                  method: "wallet_addEthereumChain",
+                  params: [
+                    {
+                      chainId: targetChainHex,
+                      chainName: "Sepolia Test Network",
+                      nativeCurrency: { name: "SepoliaETH", symbol: "ETH", decimals: 18 },
+                      rpcUrls: [
+                        process.env.NEXT_PUBLIC_RPC_URL || "https://ethereum-sepolia-rpc.publicnode.com",
+                        "https://rpc.sepolia.org",
+                      ],
+                      blockExplorerUrls: ["https://sepolia.etherscan.io"],
+                    },
+                  ],
+                });
+              } catch (_addError: any) {
+                console.warn("Failed to add Sepolia network to MetaMask", _addError);
+                const msg = "Failed to add Sepolia network to MetaMask.";
+                setStatus(msg);
+                return { success: false, error: msg };
+              }
+            } else if (switchError?.code === 4001) {
+              const msg = "Network switch to Sepolia was rejected in MetaMask.";
+              setStatus(msg);
+              return { success: false, error: msg };
+            } else {
+              const msg = `Please switch MetaMask to Sepolia network (Chain ID: ${PHARMA_TREE_CHAIN_ID.toString()}).`;
+              setStatus(msg);
+              return { success: false, error: msg };
+            }
+          }
 
-      setContract(signerContract);
-      setAccount(walletAddress);
-      setConnected(true);
-      localStorage.setItem(WALLET_STORAGE_KEY, walletAddress);
-      setStatus(`Connected as ${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}.`);
+          // Re-verify chain after switch attempt
+          currentChainHex = (await provider.request({ method: "eth_chainId" })) as string;
+          if (BigInt(currentChainHex) !== PHARMA_TREE_CHAIN_ID) {
+            const msg = `MetaMask must be connected to Sepolia (Chain ${PHARMA_TREE_CHAIN_ID.toString()}).`;
+            setStatus(msg);
+            return { success: false, error: msg };
+          }
+        }
 
-      await loadWalletData(walletAddress, readonlyContract);
-    } catch (error: any) {
-      console.error("Wallet connection error:", error);
-      if (!silent) {
+        // Initialize fresh BrowserProvider with confirmed chain
+        const browserProvider = new ethers.BrowserProvider(provider, "any");
+        const signer = await browserProvider.getSigner(walletAddress);
+        const signerContract = new ethers.Contract(PHARMA_TREE_CONTRACT, PHARMA_TREE_ABI, signer);
+
+        setContract(signerContract);
+        setAccount(walletAddress);
+        setConnected(true);
+        if (typeof window !== "undefined") {
+          window.localStorage.setItem(WALLET_STORAGE_KEY, walletAddress);
+        }
+        setStatus(`Connected as ${walletAddress.slice(0, 6)}...${walletAddress.slice(-4)}.`);
+
+        void loadWalletData(walletAddress, readonlyContract);
+        return { success: true, account: walletAddress };
+      } catch (error: any) {
+        console.error("Wallet connection error:", error);
         let message = "Wallet connection failed.";
-        if (error?.code === 4001) message = "Connection rejected in MetaMask.";
-        else if (error?.code === -32002) message = "Connection request already open in MetaMask.";
+        if (error?.code === 4001) message = "Connection request was rejected in MetaMask.";
+        else if (error?.code === -32002) message = "MetaMask popup is already pending. Click the MetaMask extension icon.";
         else if (error?.message) message = error.message.slice(0, 100);
-        setStatus(message);
+
+        if (!silent) setStatus(message);
+        return { success: false, error: message };
+      } finally {
+        isConnectingRef.current = false;
+        setLoading(false);
       }
-    } finally {
-      isConnectingRef.current = false;
-      setLoading(false);
-    }
-  }, [loadWalletData, readonlyContract]);
+    },
+    [loadWalletData, readonlyContract]
+  );
 
   useEffect(() => {
     void refreshReadonlyState();
@@ -372,10 +451,11 @@ export function useChainData() {
 
   useEffect(() => {
     if (typeof window === "undefined") return;
-    const provider = getEthereumProvider();
-    if (!provider) return;
 
-    const autoConnect = async () => {
+    const setupListenersAndAutoConnect = async () => {
+      const provider = getEthereumProvider();
+      if (!provider) return;
+
       try {
         const accounts = (await provider.request({ method: "eth_accounts" })) as string[];
         if (accounts && accounts.length > 0) {
@@ -384,39 +464,52 @@ export function useChainData() {
       } catch (error) {
         console.warn("Auto-connect failed", error);
       }
+
+      const handleAccountsChanged = (accounts: string[]) => {
+        if (!accounts || accounts.length === 0) {
+          setAccount("");
+          setConnected(false);
+          setRole({ manufacturer: false, handler: false });
+          setIsAdmin(false);
+          setPendingApprovalCount(0);
+          setHistory([]);
+          setUnits([]);
+          window.localStorage.removeItem(WALLET_STORAGE_KEY);
+          setStatus("Wallet disconnected");
+          return;
+        }
+        window.localStorage.setItem(WALLET_STORAGE_KEY, accounts[0]);
+        void connectWallet({ silent: true });
+      };
+
+      const handleChainChanged = () => {
+        window.location.reload();
+      };
+
+      provider.on?.("accountsChanged", handleAccountsChanged);
+      provider.on?.("chainChanged", handleChainChanged);
+
+      return () => {
+        provider.removeListener?.("accountsChanged", handleAccountsChanged);
+        provider.removeListener?.("chainChanged", handleChainChanged);
+      };
     };
 
-    void autoConnect();
+    let cleanupListeners: (() => void) | undefined;
+    void setupListenersAndAutoConnect().then((cleanup) => {
+      cleanupListeners = cleanup;
+    });
 
-    const handleAccountsChanged = (accounts: string[]) => {
-      if (!accounts || accounts.length === 0) {
-        setAccount("");
-        setConnected(false);
-        setRole({ manufacturer: false, handler: false });
-        setIsAdmin(false);
-        setPendingApprovalCount(0);
-        setHistory([]);
-        setUnits([]);
-        window.localStorage.removeItem(WALLET_STORAGE_KEY);
-        setStatus("Wallet disconnected");
-        return;
-      }
-      window.localStorage.setItem(WALLET_STORAGE_KEY, accounts[0]);
-      void connectWallet({ silent: true });
+    const handleEthereumInitialized = () => {
+      void setupListenersAndAutoConnect().then((cleanup) => {
+        cleanupListeners = cleanup;
+      });
     };
-
-    const handleChainChanged = () => {
-      window.location.reload();
-    };
-
-    provider.on("accountsChanged", handleAccountsChanged);
-    provider.on("chainChanged", handleChainChanged);
+    window.addEventListener("ethereum#initialized", handleEthereumInitialized, { once: true });
 
     return () => {
-      if (provider.removeListener) {
-        provider.removeListener("accountsChanged", handleAccountsChanged);
-        provider.removeListener("chainChanged", handleChainChanged);
-      }
+      window.removeEventListener("ethereum#initialized", handleEthereumInitialized);
+      cleanupListeners?.();
     };
   }, [connectWallet]);
 
