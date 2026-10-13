@@ -34,6 +34,7 @@ frontend/out/
 *.njsproj
 *.sln
 *.sw?
+.codebase-memory/
 
 # Logs
 logs/
@@ -51,3 +52,4 @@ coverage/
 # Temporary directories
 .turbo/
 .playwright-mcp/
+report/
