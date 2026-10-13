@@ -102,6 +102,10 @@ export function PharmaWalletView({ mode }: { mode: ViewMode }) {
               <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", fontWeight: 600, textTransform: "uppercase" }}>Role Authorization</span>
               <strong style={{ fontSize: "var(--text-sm)", color: "var(--color-text-main)" }}>{role.manufacturer && role.handler ? "Manufacturer + Handler" : role.manufacturer ? "Manufacturer" : role.handler ? "Handler" : isAdmin ? "System Admin" : "Standard Account"}</strong>
             </Card>
+            <Card padding="sm" style={{ display: "flex", flexDirection: "column", gap: "var(--space-1)" }}>
+              <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", fontWeight: 600, textTransform: "uppercase" }}>Smart Contract</span>
+              <strong style={{ fontSize: "var(--text-sm)", color: "var(--color-text-main)" }}><CopyableHash hash={readonlyContract.target as string} /></strong>
+            </Card>
             <Card padding="sm" style={{ display: "flex", flexDirection: "column", gap: "var(--space-1)", cursor: "pointer" }} onClick={() => setNotifOpen(true)}>
               <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", fontWeight: 600, textTransform: "uppercase" }}>Pending Inbound</span>
               <strong style={{ fontSize: "var(--text-lg)", color: pendingIncoming.length > 0 ? "var(--color-warning)" : "var(--color-text-main)", fontVariantNumeric: "tabular-nums" }}>{pendingApprovalCount} batches</strong>
