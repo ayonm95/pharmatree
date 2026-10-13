@@ -41,8 +41,9 @@ export function OverviewTab({
         const descendants = units.filter((unit) => unit.rootId === root.id && unit.id !== root.id);
         const lineage = [root, ...descendants];
         const totalQuantity = lineage.reduce((sum, unit) => sum + Number(unit.quantity), 0);
+        const mfrAddress = root.manufacturer.toLowerCase();
         const manufacturerQuantity = lineage
-          .filter((unit) => (isAdmin ? (unit.status === 0 || unit.status === 3) : unit.currentOwner.toLowerCase() === lowerAccount && (unit.status === 0 || unit.status === 3)))
+          .filter((unit) => unit.currentOwner.toLowerCase() === mfrAddress && (unit.status === 0 || unit.status === 3))
           .reduce((sum, unit) => sum + Number(unit.quantity), 0);
         const directDescendants = descendants.filter((unit) => unit.parentId === root.id);
         const partitions = directDescendants.length > 0 ? directDescendants : descendants.filter((unit) =>
@@ -135,10 +136,13 @@ export function OverviewTab({
                   const medName = (root.metadata || "").split(",")[0] || root.metadata;
                   const isExpanded = !!expandedUnits[`overview-${root.id}`];
 
+                  const hasSoldPortion = [root, ...partitions].some((u) => u.status === 2);
                   const rootStatus = manufacturerQuantity === totalQuantity
                     ? "In stock"
                     : manufacturerQuantity > 0
                     ? "Partially transferred"
+                    : hasSoldPortion
+                    ? "Sold"
                     : "Transferred";
 
                   return (
@@ -177,7 +181,7 @@ export function OverviewTab({
                         </div>
                         <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
                           <StatusBadge
-                            status={rootStatus === "In stock" ? 0 : 1}
+                            status={rootStatus === "In stock" ? 0 : rootStatus === "Sold" ? 2 : 1}
                             label={rootStatus}
                             size="sm"
                           />
