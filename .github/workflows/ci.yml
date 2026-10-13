@@ -57,7 +57,7 @@ jobs:
         working-directory: ./frontend
         env:
           NEXT_PUBLIC_PHARMA_TREE_CONTRACT: "0x36ea40cb4edc7e304DA1A280480afd16ABb124D0"
-          NEXT_PUBLIC_RPC_URL: "https://sepolia.infura.io/v3/ab602f75684b462da53b56b8e765e5a2"
+          NEXT_PUBLIC_RPC_URL: "https://ethereum-sepolia-rpc.publicnode.com"
           NEXT_PUBLIC_CHAIN_ID: "11155111"
           NEXT_PUBLIC_DEPLOYMENT_BLOCK: "11671278"
         run: npm run build

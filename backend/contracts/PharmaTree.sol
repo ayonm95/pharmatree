@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT
-pragma solidity ^0.8.19;
+pragma solidity ^0.8.24;
 
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
@@ -36,6 +36,8 @@ contract PharmaTree is AccessControl {
     event TransferInitiated(uint256 indexed id, address indexed from, address indexed to);
     event TransferCompleted(uint256 indexed id, address indexed from, address indexed to);
     event TransferRejected(uint256 indexed id, address indexed from, address indexed rejectedBy);
+    event TransferCancelled(uint256 indexed id, address indexed cancelledBy);
+    event UnitReclaimed(uint256 indexed id, address indexed reclaimedBy);
     event UnitSold(uint256 indexed id, address indexed soldBy);
 
     modifier onlyAdmin() {
@@ -56,11 +58,13 @@ contract PharmaTree is AccessControl {
     }
 
     function addManufacturer(address _mfr) external onlyAdmin {
+        require(_mfr != address(0), "Zero address invalid");
         grantRole(MANUFACTURER_ROLE, _mfr);
         isManufacturer[_mfr] = true;
     }
 
     function addHandler(address _handler) external onlyAdmin {
+        require(_handler != address(0), "Zero address invalid");
         grantRole(HANDLER_ROLE, _handler);
         isHandler[_handler] = true;
     }
@@ -90,6 +94,8 @@ contract PharmaTree is AccessControl {
         require(units[_parentId].currentOwner == msg.sender, "Must own the parent to pack children");
         require(units[_parentId].status == Status.Active, "Parent unit cannot be in transit or sold");
         require(_count > 0, "Count must be greater than zero");
+        require(_count <= 250, "Batch count exceeds limit");
+        require(uint8(_childLevel) > uint8(units[_parentId].level), "Child level must be strictly lower in hierarchy");
 
         address originalMfr = units[_parentId].manufacturer;
         uint256 rootId = units[_parentId].rootId == 0 ? _parentId : units[_parentId].rootId;
@@ -204,6 +210,23 @@ contract PharmaTree is AccessControl {
         units[_id].status = Status.Rejected;
 
         emit TransferRejected(_id, units[_id].currentOwner, msg.sender);
+    }
+
+    function cancelTransfer(uint256 _id) external onlyCurrentOwner(_id) {
+        require(units[_id].status == Status.PendingTransfer, "No transfer pending");
+
+        units[_id].pendingReceiver = address(0);
+        units[_id].status = Status.Active;
+
+        emit TransferCancelled(_id, msg.sender);
+    }
+
+    function reclaimRejectedUnit(uint256 _id) external onlyCurrentOwner(_id) {
+        require(units[_id].status == Status.Rejected, "Unit is not rejected");
+
+        units[_id].status = Status.Active;
+
+        emit UnitReclaimed(_id, msg.sender);
     }
     
 

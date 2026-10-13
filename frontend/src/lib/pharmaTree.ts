@@ -12,6 +12,8 @@ export const PHARMA_TREE_ABI = [
   "function initiatePartialTransfer(uint256 _id, address _receiver, uint256 _quantity) returns (uint256)",
   "function acceptTransfer(uint256 _id)",
   "function rejectTransfer(uint256 _id)",
+  "function cancelTransfer(uint256 _id)",
+  "function reclaimRejectedUnit(uint256 _id)",
   "function markAsSold(uint256 _id)",
   "function sellQuantity(uint256 _id, uint256 _quantity) returns (uint256)",
   "function getChildren(uint256 _parentId) view returns (uint256[])",
@@ -21,6 +23,8 @@ export const PHARMA_TREE_ABI = [
   "event TransferInitiated(uint256 indexed id, address indexed from, address indexed to)",
   "event TransferCompleted(uint256 indexed id, address indexed from, address indexed to)",
   "event TransferRejected(uint256 indexed id, address indexed from, address indexed rejectedBy)",
+  "event TransferCancelled(uint256 indexed id, address indexed cancelledBy)",
+  "event UnitReclaimed(uint256 indexed id, address indexed reclaimedBy)",
   "event UnitSold(uint256 indexed id, address indexed soldBy)"
 ] as const;
 export const PHARMA_TREE_CONTRACT = process.env.NEXT_PUBLIC_PHARMA_TREE_CONTRACT || "0x2bAE15834463a657F68673135B8deCd39EF33044";

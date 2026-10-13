@@ -7,7 +7,6 @@ const PUBLIC_SEPOLIA_RPCS = [
   "https://ethereum-sepolia-rpc.publicnode.com",
   "https://gateway.tenderly.co/public/sepolia",
   "https://1rpc.io/sepolia",
-  "https://sepolia.infura.io/v3/ab602f75684b462da53b56b8e765e5a2",
 ];
 
 function getRpcEndpoints(): string[] {

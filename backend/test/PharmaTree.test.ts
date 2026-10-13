@@ -123,6 +123,22 @@ describe("PharmaTree Smart Contract", function () {
         pharmaTree.connect(unauthorized).createChildUnits(1, UnitLevel.Box, "Meta", 2)
       ).to.be.revertedWith("Must own the parent to pack children");
     });
+
+    it("Should prevent packing children at an inverted or equal hierarchy level", async function () {
+      await pharmaTree.connect(manufacturer).createRootUnit(UnitLevel.Box, "Box-01", 1);
+
+      await expect(
+        pharmaTree.connect(manufacturer).createChildUnits(1, UnitLevel.Container, "Container-Meta", 1)
+      ).to.be.revertedWith("Child level must be strictly lower in hierarchy");
+    });
+
+    it("Should revert if packing child count exceeds batch limit", async function () {
+      await pharmaTree.connect(manufacturer).createRootUnit(UnitLevel.Container, "Container-01", 1);
+
+      await expect(
+        pharmaTree.connect(manufacturer).createChildUnits(1, UnitLevel.Box, "Box-Meta", 251)
+      ).to.be.revertedWith("Batch count exceeds limit");
+    });
   });
 
   describe("Two-Party Transfer Handshake", function () {
@@ -182,6 +198,29 @@ describe("PharmaTree Smart Contract", function () {
       const unit = await pharmaTree.getUnitDetails(1);
       expect(unit.status).to.equal(Status.Rejected);
       expect(unit.pendingReceiver).to.equal(ethers.ZeroAddress);
+    });
+
+    it("Should allow the owner to cancel a pending transfer", async function () {
+      await pharmaTree.connect(manufacturer).initiateTransfer(1, distributor.address);
+      await expect(pharmaTree.connect(manufacturer).cancelTransfer(1))
+        .to.emit(pharmaTree, "TransferCancelled")
+        .withArgs(1, manufacturer.address);
+
+      const unit = await pharmaTree.getUnitDetails(1);
+      expect(unit.status).to.equal(Status.Active);
+      expect(unit.pendingReceiver).to.equal(ethers.ZeroAddress);
+    });
+
+    it("Should allow the owner to reclaim a rejected unit", async function () {
+      await pharmaTree.connect(manufacturer).initiateTransfer(1, distributor.address);
+      await pharmaTree.connect(distributor).rejectTransfer(1);
+
+      await expect(pharmaTree.connect(manufacturer).reclaimRejectedUnit(1))
+        .to.emit(pharmaTree, "UnitReclaimed")
+        .withArgs(1, manufacturer.address);
+
+      const unit = await pharmaTree.getUnitDetails(1);
+      expect(unit.status).to.equal(Status.Active);
     });
   });
 

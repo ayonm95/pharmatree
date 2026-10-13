@@ -7,7 +7,16 @@ const LOCAL_DEPLOYER_KEY = process.env.PRIVATE_KEY || "";
 const SEPOLIA_DEPLOYER_KEY = process.env.SEPOLIA_PRIVATE_KEY_MANUFACTURER || "";
 
 const config: HardhatUserConfig = {
-  solidity: "0.8.20",
+  solidity: {
+    compilers: [
+      {
+        version: "0.8.24",
+        settings: {
+          evmVersion: "cancun",
+        },
+      },
+    ],
+  },
   networks: {
     localhost: {
       url: "http://127.0.0.1:8545",
