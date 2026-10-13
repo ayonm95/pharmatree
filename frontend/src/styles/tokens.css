@@ -15,6 +15,7 @@
   --color-text-main: #0f172a;
   --color-text-muted: #475569;
   --color-text-subtle: #94a3b8;
+  --color-border-subtle: #f1f5f9;
   --color-border-default: #e2e8f0;
   --color-border-strong: #cbd5e1;
   --color-border-focus: #0f766e;
@@ -29,17 +30,23 @@
 
   /* --- Semantic Status Tokens (Background, Foreground, Border) --- */
   /* Success: Active, Verified, Authentic, Completed */
+  --color-success: #15803d;
   --color-success-bg: #f0fdf4;
+  --color-success-subtle: #f0fdf4;
   --color-success-fg: #15803d;
   --color-success-border: #bbf7d0;
 
   /* Warning: Pending Transfer, In Transit, Attention Required */
+  --color-warning: #b45309;
   --color-warning-bg: #fffbeb;
+  --color-warning-subtle: #fffbeb;
   --color-warning-fg: #b45309;
   --color-warning-border: #fde68a;
 
   /* Danger / Destructive: Rejected, Flagged, Recalled, Expired, Error */
+  --color-danger: #b91c1c;
   --color-danger-bg: #fef2f2;
+  --color-danger-subtle: #fef2f2;
   --color-danger-fg: #b91c1c;
   --color-danger-border: #fecaca;
   --color-danger-hover: #991b1b;
@@ -53,12 +60,14 @@
   --radius-control: 8px;
   --radius-surface: 12px;
   --radius-full: 9999px;
+  --radius-pill: 9999px;
 
-  /* --- Spacing Scale (4px base grid: 4, 8, 12, 16, 24, 32, 48) --- */
+  /* --- Spacing Scale (4px base grid: 4, 8, 12, 16, 20, 24, 32, 48) --- */
   --space-1: 4px;
   --space-2: 8px;
   --space-3: 12px;
   --space-4: 16px;
+  --space-5: 20px;
   --space-6: 24px;
   --space-8: 32px;
   --space-12: 48px;
@@ -91,8 +100,10 @@
   --shadow-md: 0 4px 6px -1px rgba(15, 23, 42, 0.08), 0 2px 4px -2px rgba(15, 23, 42, 0.04);
 
   /* --- Transitions & Motion (120-180ms color/bg/border/opacity only) --- */
+  --duration-fast: 100ms;
   --duration-normal: 150ms;
   --ease-default: ease-in-out;
+  --transition-fast: all var(--duration-fast) var(--ease-default);
   --transition-color: color var(--duration-normal) var(--ease-default);
   --transition-bg: background-color var(--duration-normal) var(--ease-default);
   --transition-border: border-color var(--duration-normal) var(--ease-default);

@@ -51,7 +51,7 @@ export function CopyableHash({
         padding: "2px var(--space-2)",
         maxWidth: "100%",
       }}
-      title={value}
+      title={targetValue}
       className={`copyable-hash ${className}`}
     >
       {label && <span style={{ fontWeight: 600, color: "var(--color-text-main)" }}>{label}:</span>}
@@ -61,7 +61,7 @@ export function CopyableHash({
       <button
         type="button"
         onClick={handleCopy}
-        aria-label={copied ? "Copied" : `Copy ${value}`}
+        aria-label={copied ? "Copied" : `Copy ${targetValue}`}
         style={{
           display: "inline-flex",
           alignItems: "center",

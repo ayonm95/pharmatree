@@ -27,6 +27,36 @@ body {
   overflow-x: hidden;
 }
 
+/* Browser Surface Theming (Impeccable & Deterministic Craft) */
+::selection {
+  background-color: var(--color-primary-subtle);
+  color: var(--color-primary-active);
+}
+
+* {
+  caret-color: var(--color-primary);
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-border-strong) transparent;
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-border-strong);
+  border-radius: var(--radius-full);
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-text-subtle);
+}
+
 /* Accessible Skip Link */
 .skip-link {
   position: absolute;
@@ -80,6 +110,29 @@ textarea {
 code,
 pre {
   font-family: var(--font-mono);
+}
+
+/* Essential Animations */
+@keyframes spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.4;
+  }
+}
+
+.skeleton-pulse {
+  animation: pulse 1.8s ease-in-out infinite;
 }
 
 /* Responsive Sidebar Rules */

@@ -98,10 +98,14 @@ export function ToastContainer({ toasts, onDismiss, onClose }: ToastProps) {
                 border: "none",
                 color: "inherit",
                 cursor: "pointer",
-                padding: "2px",
+                minWidth: "32px",
+                minHeight: "32px",
+                borderRadius: "var(--radius-control)",
                 display: "inline-flex",
                 alignItems: "center",
+                justifyContent: "center",
                 opacity: 0.7,
+                transition: "opacity var(--duration-fast) var(--ease-default)",
               }}
             >
               <X size={16} aria-hidden="true" />
