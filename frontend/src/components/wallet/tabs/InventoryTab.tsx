@@ -9,6 +9,7 @@ import { CopyableHash } from "@/components/ui/CopyableHash";
 import { UnitRecord, HistoryEntry } from "@/types/pharmatree";
 import { unitLevelToName } from "@/lib/pharmaTree";
 import { formatDate } from "@/lib/format";
+import { getPartitionBranchStats } from "@/lib/lineage";
 import { Package, ChevronDown, ChevronRight, QrCode, FileText } from "lucide-react";
 
 interface InventoryTabProps {
@@ -135,10 +136,23 @@ export function InventoryTab({
               const isMfr = unit.manufacturer.toLowerCase() === lowerAccount;
               const lineage = [unit, ...partitions];
               const totalQuantity = lineage.reduce((sum, c) => sum + Number(c.quantity), 0);
+              const mfrAddress = unit.manufacturer.toLowerCase();
               const currentQuantity = lineage
-                .filter((c) => (c.status === 0 || c.status === 3) && c.currentOwner.toLowerCase() === lowerAccount)
+                .filter((c) => (c.status === 0 || c.status === 3) && c.currentOwner.toLowerCase() === mfrAddress)
                 .reduce((sum, c) => sum + Number(c.quantity), 0);
-              const isPartial = isMfr && currentQuantity > 0 && currentQuantity < totalQuantity;
+              const hasSoldPortion = lineage.some((c) => c.status === 2);
+              const hasTransferredPortion = lineage.some((c) => c.currentOwner.toLowerCase() !== mfrAddress);
+              
+              const batchStatusText = currentQuantity === totalQuantity
+                ? "In stock"
+                : currentQuantity > 0
+                ? "Partially transferred"
+                : hasSoldPortion
+                ? "Sold"
+                : hasTransferredPortion
+                ? "Transferred"
+                : "Active";
+
               const unitHistoryLogs = history.filter((h) => h.id === unit.id);
 
               return (
@@ -190,15 +204,15 @@ export function InventoryTab({
                           </span>
                         </div>
                         <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", fontVariantNumeric: "tabular-nums" }}>
-                          {isMfr ? `${currentQuantity}/${totalQuantity} in stock` : `Qty ${unit.quantity} tablets`}
+                          {isMfr || isAdmin ? `${currentQuantity}/${totalQuantity} in stock` : `Qty ${unit.quantity} tablets`}
                         </div>
                       </div>
                     </div>
 
                     <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
                       <StatusBadge
-                        status={unit.status}
-                        label={isPartial ? "Partially transferred" : undefined}
+                        status={batchStatusText === "In stock" ? 0 : batchStatusText === "Sold" ? 2 : 1}
+                        label={batchStatusText}
                       />
                     </div>
                   </button>
@@ -329,38 +343,44 @@ export function InventoryTab({
                             Sub-Unit Partitions ({partitions.length})
                           </span>
                           <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
-                            {partitions.map((part) => (
-                              <div
-                                key={part.id}
-                                style={{
-                                  display: "flex",
-                                  alignItems: "center",
-                                  justifyContent: "space-between",
-                                  padding: "var(--space-2) var(--space-3)",
-                                  border: "1px solid var(--color-border-subtle)",
-                                  borderRadius: "var(--radius-control)",
-                                  backgroundColor: "var(--color-bg-surface)",
-                                  fontSize: "var(--text-xs)",
-                                }}
-                              >
-                                <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-                                  <strong style={{ fontFamily: "var(--font-mono)" }}>#{part.displayId}</strong>
-                                  <span style={{ color: "var(--color-text-muted)", fontVariantNumeric: "tabular-nums" }}>
-                                    Qty {part.quantity}
-                                  </span>
+                            {partitions.map((part) => {
+                              const stats = getPartitionBranchStats(part, units, account);
+                              return (
+                                <div
+                                  key={part.id}
+                                  style={{
+                                    display: "flex",
+                                    alignItems: "center",
+                                    justifyContent: "space-between",
+                                    padding: "var(--space-2) var(--space-3)",
+                                    border: "1px solid var(--color-border-subtle)",
+                                    borderRadius: "var(--radius-control)",
+                                    backgroundColor: "var(--color-bg-surface)",
+                                    fontSize: "var(--text-xs)",
+                                  }}
+                                >
+                                  <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+                                    <strong style={{ fontFamily: "var(--font-mono)" }}>#{part.displayId}</strong>
+                                    <span style={{ color: "var(--color-text-muted)", fontVariantNumeric: "tabular-nums" }}>
+                                      Qty {stats.displayQty}
+                                    </span>
+                                  </div>
+                                  <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+                                    <StatusBadge
+                                      variant={stats.variant}
+                                      label={stats.statusText}
+                                    />
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      onClick={() => onSelectUnitDetail(part)}
+                                    >
+                                      View
+                                    </Button>
+                                  </div>
                                 </div>
-                                <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
-                                  <StatusBadge status={part.status} />
-                                  <Button
-                                    variant="ghost"
-                                    size="sm"
-                                    onClick={() => onSelectUnitDetail(part)}
-                                  >
-                                    View
-                                  </Button>
-                                </div>
-                              </div>
-                            ))}
+                              );
+                            })}
                           </div>
                         </div>
                       )}
