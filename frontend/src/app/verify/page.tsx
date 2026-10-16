@@ -28,6 +28,12 @@ import {
   ExternalLink,
   History,
   Plus,
+  ShieldCheck,
+  Layers,
+  Clock,
+  Eye,
+  Pill,
+  Box,
 } from "lucide-react";
 
 type UnitRecord = {
@@ -44,11 +50,22 @@ type UnitRecord = {
 };
 
 type TimelineEvent = {
+  unitId: string;
+  unitLevel: number;
+  unitLabel: string;
+  isScannedUnit: boolean;
   title: string;
   description: string;
   timestamp?: number;
   txHash?: string;
   type: "created" | "transferred" | "sold" | "rejected";
+};
+
+type ScanRecord = {
+  scanCount: number;
+  firstScanTime: number | null;
+  lastScanTime: number | null;
+  isFirstScan: boolean;
 };
 
 function VerifyContent() {
@@ -58,7 +75,9 @@ function VerifyContent() {
   const [inputUnitId, setInputUnitId] = useState(initialId);
   const [activeUnitId, setActiveUnitId] = useState(initialId);
   const [unit, setUnit] = useState<UnitRecord | null>(null);
+  const [lineage, setLineage] = useState<UnitRecord[]>([]);
   const [timeline, setTimeline] = useState<TimelineEvent[]>([]);
+  const [scanData, setScanData] = useState<ScanRecord | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -79,7 +98,26 @@ function VerifyContent() {
       setLoading(true);
       setError(null);
       setUnit(null);
+      setLineage([]);
       setTimeline([]);
+      setScanData(null);
+
+      // 1. Post to scan tracking API
+      try {
+        const scanRes = await fetch("/api/scan", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ unitId: activeUnitId }),
+        });
+        if (scanRes.ok) {
+          const scanJson = await scanRes.json();
+          if (!cancelled && scanJson.scanCount) {
+            setScanData(scanJson);
+          }
+        }
+      } catch (scanErr) {
+        console.warn("Could not log scan count:", scanErr);
+      }
 
       try {
         const provider = readonlyProvider;
@@ -104,13 +142,51 @@ function VerifyContent() {
           metadata: detail[8],
         };
 
-        setUnit(loadedUnit);
+        // 2. Recursive Lineage Resolution: traverse up the parent tree
+        const lineageUnits: UnitRecord[] = [loadedUnit];
+        const visitedIds = new Set<string>([loadedUnit.id]);
+        let nextParentId = loadedUnit.parentId;
 
+        while (nextParentId && nextParentId !== "0" && !visitedIds.has(nextParentId)) {
+          visitedIds.add(nextParentId);
+          try {
+            const pDetail = await contract.getUnitDetails(BigInt(nextParentId));
+            const pUnit: UnitRecord = {
+              id: String(nextParentId),
+              parentId: String(pDetail[0]),
+              rootId: String(pDetail[1]),
+              level: Number(pDetail[2]),
+              manufacturer: pDetail[3],
+              currentOwner: pDetail[4],
+              pendingReceiver: pDetail[5],
+              status: Number(pDetail[6]),
+              quantity: String(pDetail[7]),
+              metadata: pDetail[8],
+            };
+            lineageUnits.push(pUnit);
+            nextParentId = pUnit.parentId;
+          } catch (pErr) {
+            console.warn(`Lineage lookup halted at parent #${nextParentId}:`, pErr);
+            break;
+          }
+        }
+
+        if (cancelled) return;
+        setUnit(loadedUnit);
+        setLineage(lineageUnits);
+
+        // Map unit ID to record for quick lookup
+        const unitMap = new Map<string, UnitRecord>();
+        for (const u of lineageUnits) {
+          unitMap.set(u.id, u);
+        }
+
+        // 3. Multi-tier Blockchain Event Timeline
         const events: TimelineEvent[] = [];
         try {
           const latestBlock = await provider.getBlockNumber();
           const configuredStart = Number(process.env.NEXT_PUBLIC_DEPLOYMENT_BLOCK || "11683269");
-          const fromBlock = configuredStart > 0 ? configuredStart : Math.max(0, latestBlock - 15000);
+          const fromBlock = configuredStart > 0 ? configuredStart : Math.max(0, latestBlock - 20000);
 
           const LOG_CHUNK_SIZE = 40_000;
           const ranges: { from: number; to: number }[] = [];
@@ -138,7 +214,16 @@ function VerifyContent() {
               if (!parsed || !parsed.args) continue;
 
               const eventUnitId = String(parsed.args[0]);
-              if (eventUnitId !== String(activeUnitId)) continue;
+              // Only capture events relevant to this unit or any of its packaging ancestors
+              if (!visitedIds.has(eventUnitId)) continue;
+
+              const relatedUnit = unitMap.get(eventUnitId);
+              const unitLvl = relatedUnit ? relatedUnit.level : 4;
+              const lvlName = unitLevelToName(unitLvl);
+              const isScanned = eventUnitId === String(activeUnitId);
+              const label = isScanned
+                ? `Scanned Medicine (#${eventUnitId})`
+                : `${lvlName} (#${eventUnitId})`;
 
               if (!blockTimes.has(rawLog.blockNumber)) {
                 try {
@@ -153,67 +238,103 @@ function VerifyContent() {
 
               if (parsed.name === "UnitCreated") {
                 events.push({
-                  title: "Manufactured & Registered",
-                  description: `Created by manufacturer ${formatAddress(parsed.args.owner || parsed.args[3])}`,
+                  unitId: eventUnitId,
+                  unitLevel: unitLvl,
+                  unitLabel: label,
+                  isScannedUnit: isScanned,
+                  title: isScanned
+                    ? "Medicine Registered & Packaged"
+                    : `${lvlName} Packaged & Serialized`,
+                  description: `Registered at manufacturing facility by ${formatAddress(parsed.args.owner || parsed.args[3])}`,
                   timestamp: time,
                   txHash: rawLog.transactionHash,
                   type: "created",
                 });
               } else if (parsed.name === "TransferInitiated") {
                 events.push({
-                  title: "Transfer Dispatched",
-                  description: `Sent to receiver ${formatAddress(parsed.args.to || parsed.args[2])}`,
+                  unitId: eventUnitId,
+                  unitLevel: unitLvl,
+                  unitLabel: label,
+                  isScannedUnit: isScanned,
+                  title: `${lvlName} In-Transit (Dispatched)`,
+                  description: `Dispatched from ${formatAddress(parsed.args.from || parsed.args[1])} to ${formatAddress(parsed.args.to || parsed.args[2])}`,
                   timestamp: time,
                   txHash: rawLog.transactionHash,
                   type: "transferred",
                 });
               } else if (parsed.name === "TransferCompleted") {
                 events.push({
-                  title: "Custody Accepted",
-                  description: `Accepted by ${formatAddress(parsed.args.to || parsed.args[2])}`,
+                  unitId: eventUnitId,
+                  unitLevel: unitLvl,
+                  unitLabel: label,
+                  isScannedUnit: isScanned,
+                  title: `${lvlName} Custody Accepted`,
+                  description: `Received and custody accepted by ${formatAddress(parsed.args.to || parsed.args[2])}`,
                   timestamp: time,
                   txHash: rawLog.transactionHash,
                   type: "transferred",
                 });
               } else if (parsed.name === "UnitSold") {
                 events.push({
-                  title: "Dispensed / Sold to Patient",
-                  description: `Marked as sold by retailer ${formatAddress(parsed.args.soldBy || parsed.args[1])}`,
+                  unitId: eventUnitId,
+                  unitLevel: unitLvl,
+                  unitLabel: label,
+                  isScannedUnit: isScanned,
+                  title: isScanned
+                    ? "Dispensed to Patient"
+                    : `${lvlName} Dispensed / Sold`,
+                  description: `Officially dispensed by retailer/pharmacy ${formatAddress(parsed.args.soldBy || parsed.args[1])}`,
                   timestamp: time,
                   txHash: rawLog.transactionHash,
                   type: "sold",
                 });
               } else if (parsed.name === "TransferRejected") {
                 events.push({
-                  title: "Transfer Rejected",
-                  description: `Rejected by receiver ${formatAddress(parsed.args.rejectedBy || parsed.args[2])}`,
+                  unitId: eventUnitId,
+                  unitLevel: unitLvl,
+                  unitLabel: label,
+                  isScannedUnit: isScanned,
+                  title: `${lvlName} Custody Rejected`,
+                  description: `Rejected by downstream receiver ${formatAddress(parsed.args.rejectedBy || parsed.args[2])}`,
                   timestamp: time,
                   txHash: rawLog.transactionHash,
                   type: "rejected",
                 });
               }
             } catch {
-              // skip unparseable
+              // skip unparseable logs
             }
           }
         } catch (eventErr) {
           console.warn("Could not load event timeline logs:", eventErr);
         }
 
+        // Fallback default events if no logs indexed
         if (events.length === 0) {
           events.push({
+            unitId: loadedUnit.id,
+            unitLevel: loadedUnit.level,
+            unitLabel: `Unit #${loadedUnit.id}`,
+            isScannedUnit: true,
             title: "Manufactured on Ethereum Sepolia",
-            description: `Registered by manufacturer ${formatAddress(loadedUnit.manufacturer)}`,
+            description: `Registered by certified manufacturer ${formatAddress(loadedUnit.manufacturer)}`,
             type: "created",
           });
           if (loadedUnit.status === 2) {
             events.push({
+              unitId: loadedUnit.id,
+              unitLevel: loadedUnit.level,
+              unitLabel: `Unit #${loadedUnit.id}`,
+              isScannedUnit: true,
               title: "Sold to Consumer",
               description: `Dispensed by pharmacy ${formatAddress(loadedUnit.currentOwner)}`,
               type: "sold",
             });
           }
         }
+
+        // Sort events chronologically
+        events.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0));
 
         if (!cancelled) {
           setTimeline(events);
@@ -224,7 +345,7 @@ function VerifyContent() {
           setError(
             err.message?.includes("Unit does not exist")
               ? `Unit #${activeUnitId} was not found on the blockchain.`
-              : `Could not find Unit #${activeUnitId}. Verify the ID or check network connectivity.`
+              : `Could not find Unit #${activeUnitId}. Verify the numerical ID or check network connectivity.`
           );
         }
       } finally {
@@ -252,7 +373,69 @@ function VerifyContent() {
     }
   };
 
-  const isRejected = unit?.status === 3;
+  // Hierarchy top-to-bottom: [Container, Shipment, Batch, Box, IndividualItem]
+  const hierarchy = [...lineage].reverse();
+
+  // Evaluate consumer status verdicts across the hierarchy
+  const isDirectlyRejected = unit?.status === 3;
+  const anyAncestorRejected = lineage.some((u) => u.status === 3);
+  const isFlagged = isDirectlyRejected || anyAncestorRejected;
+  const isPending = unit?.status === 1 || lineage.some((u) => u.status === 1);
+  const isSold = unit?.status === 2;
+  const isActive = unit?.status === 0;
+
+  let verdict = {
+    title: "Verified Authentic Pharmaceutical",
+    description: "Cryptographically verified on Ethereum Sepolia. In active pharmacy custody, verified unbroken provenance.",
+    variant: "success" as "success" | "warning" | "danger" | "info",
+    icon: CheckCircle2,
+  };
+
+  if (isFlagged) {
+    verdict = {
+      title: "DANGER: Custody Flagged / Transfer Rejected",
+      description: isDirectlyRejected
+        ? "This medicine unit was formally rejected during inspection or transit. DO NOT CONSUME."
+        : "An upstream shipping container or batch carrying this unit was rejected during transit. Unsafe custody integrity.",
+      variant: "danger",
+      icon: XCircle,
+    };
+  } else if (isPending) {
+    verdict = {
+      title: "Notice: Medicine Currently In Transit",
+      description: "This item or its bulk carrier container is currently in dispatch and has not yet been accepted into pharmacy inventory.",
+      variant: "warning",
+      icon: AlertTriangle,
+    };
+  } else if (isSold) {
+    verdict = {
+      title: "Verified Authentic Pharmaceutical - Dispensed & Purchased",
+      description: `Cryptographically verified on Ethereum Sepolia. Dispensed to patient by authorized distributor/pharmacy ${unit ? formatAddress(unit.currentOwner) : ""}.`,
+      variant: "info",
+      icon: CheckCircle2,
+    };
+  } else if (isActive) {
+    verdict = {
+      title: "Verified Authentic Pharmaceutical - In Stock",
+      description: "Direct unbroken provenance from certified manufacturer. Available in authorized retail stock, ready for patient purchase.",
+      variant: "success",
+      icon: CheckCircle2,
+    };
+  }
+
+  const getTierIcon = (level: number) => {
+    switch (level) {
+      case 0: // Container
+      case 1: // Shipment
+        return <Truck size={18} />;
+      case 2: // Batch
+      case 3: // Box
+        return <Box size={18} />;
+      case 4: // IndividualItem
+      default:
+        return <Pill size={18} />;
+    }
+  };
 
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", backgroundColor: "var(--color-bg-page)" }}>
@@ -334,7 +517,7 @@ function VerifyContent() {
             Public Medicine Provenance Verification
           </h1>
           <p style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--color-text-muted)", maxWidth: "580px" }}>
-            Verify pharmaceutical authenticity, container custody, and manufacturer origin directly from the immutable Ethereum Sepolia ledger.
+            Verify pharmaceutical authenticity, container custody, and multi-tier packaging provenance directly from the immutable Ethereum Sepolia ledger.
           </p>
 
           <form
@@ -428,11 +611,11 @@ function VerifyContent() {
             <Card padding="lg" style={{ display: "flex", alignItems: "flex-start", gap: "var(--space-4)" }}>
               <Skeleton width="48px" height="48px" borderRadius="var(--radius-pill)" />
               <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)", flex: 1 }}>
-                <Skeleton width="220px" height="24px" />
-                <Skeleton width="340px" height="16px" />
+                <Skeleton width="260px" height="24px" />
+                <Skeleton width="380px" height="16px" />
                 <div style={{ display: "flex", gap: "var(--space-2)", marginTop: "var(--space-2)" }}>
-                  <Skeleton width="90px" height="24px" borderRadius="var(--radius-pill)" />
-                  <Skeleton width="90px" height="24px" borderRadius="var(--radius-pill)" />
+                  <Skeleton width="100px" height="24px" borderRadius="var(--radius-pill)" />
+                  <Skeleton width="100px" height="24px" borderRadius="var(--radius-pill)" />
                 </div>
               </div>
             </Card>
@@ -450,15 +633,30 @@ function VerifyContent() {
           </div>
         )}
 
-        {/* State 2 & 3: Loaded Unit (Authentic OR Flagged/Rejected) */}
+        {/* State 2 & 3: Loaded Unit (Authentic, In-Transit, Sold, or Flagged) */}
         {unit && !loading && (
           <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-6)" }} className="fade-in">
-            {/* Header Verdict Card */}
+            
+            {/* 1. Header Verdict Banner */}
             <Card
               padding="lg"
               style={{
-                border: isRejected ? "1px solid var(--color-danger-border)" : "1px solid var(--color-success-border)",
-                backgroundColor: isRejected ? "var(--color-danger-subtle)" : "var(--color-success-subtle)",
+                border:
+                  verdict.variant === "danger"
+                    ? "1px solid var(--color-danger-border)"
+                    : verdict.variant === "warning"
+                    ? "1px solid var(--color-warning-border)"
+                    : verdict.variant === "info"
+                    ? "1px solid #bfdbfe"
+                    : "1px solid var(--color-success-border)",
+                backgroundColor:
+                  verdict.variant === "danger"
+                    ? "var(--color-danger-subtle)"
+                    : verdict.variant === "warning"
+                    ? "var(--color-warning-subtle)"
+                    : verdict.variant === "info"
+                    ? "#eff6ff"
+                    : "var(--color-success-subtle)",
               }}
             >
               <div style={{ display: "flex", alignItems: "flex-start", gap: "var(--space-4)" }}>
@@ -467,15 +665,29 @@ function VerifyContent() {
                     width: "48px",
                     height: "48px",
                     borderRadius: "var(--radius-pill)",
-                    backgroundColor: isRejected ? "#fee2e2" : "#dcfce7",
-                    color: isRejected ? "var(--color-danger)" : "var(--color-success)",
+                    backgroundColor:
+                      verdict.variant === "danger"
+                        ? "#fee2e2"
+                        : verdict.variant === "warning"
+                        ? "#fef3c7"
+                        : verdict.variant === "info"
+                        ? "#dbeafe"
+                        : "#dcfce7",
+                    color:
+                      verdict.variant === "danger"
+                        ? "var(--color-danger)"
+                        : verdict.variant === "warning"
+                        ? "var(--color-warning)"
+                        : verdict.variant === "info"
+                        ? "#2563eb"
+                        : "var(--color-success)",
                     display: "flex",
                     alignItems: "center",
                     justifyContent: "center",
                     flexShrink: 0,
                   }}
                 >
-                  {isRejected ? <AlertTriangle size={28} /> : <CheckCircle2 size={28} />}
+                  <verdict.icon size={28} />
                 </div>
                 <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                   <h2
@@ -483,21 +695,180 @@ function VerifyContent() {
                       margin: 0,
                       fontSize: "var(--text-lg)",
                       fontWeight: 800,
-                      color: isRejected ? "var(--color-danger)" : "var(--color-success)",
+                      color:
+                        verdict.variant === "danger"
+                          ? "var(--color-danger)"
+                          : verdict.variant === "warning"
+                          ? "var(--color-warning)"
+                          : verdict.variant === "info"
+                          ? "#1e40af"
+                          : "var(--color-success)",
                     }}
                   >
-                    {isRejected ? "Custody Flagged / Transfer Rejected" : "Verified Authentic Pharmaceutical"}
+                    {verdict.title}
                   </h2>
                   <p style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--color-text-main)" }}>
-                    {isRejected
-                      ? "This medicine unit was rejected by a downstream handler during transit or inspection. Returned to sender."
-                      : "Cryptographically verified on Ethereum Sepolia. Direct unbroken provenance from certified manufacturer."}
+                    {verdict.description}
                   </p>
                 </div>
               </div>
             </Card>
 
-            {/* Batch Specifications Grid */}
+            {/* 2. Anti-Counterfeit Verification Frequency Badge */}
+            {scanData && (
+              <Card
+                padding="md"
+                style={{
+                  border:
+                    scanData.scanCount > 1
+                      ? "1px solid var(--color-warning-border)"
+                      : "1px solid var(--color-success-border)",
+                  backgroundColor:
+                    scanData.scanCount > 1
+                      ? "var(--color-warning-subtle)"
+                      : "var(--color-success-subtle)",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "flex-start", gap: "var(--space-3)" }}>
+                  {scanData.scanCount === 1 ? (
+                    <ShieldCheck size={22} style={{ color: "var(--color-success)", flexShrink: 0, marginTop: "2px" }} />
+                  ) : (
+                    <Eye size={22} style={{ color: "var(--color-warning)", flexShrink: 0, marginTop: "2px" }} />
+                  )}
+                  <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap" }}>
+                      <strong style={{ fontSize: "var(--text-sm)", color: "var(--color-text-main)" }}>
+                        {scanData.scanCount === 1
+                          ? "First Verification Scan Recorded"
+                          : `QR Code Verified ${scanData.scanCount} Times`}
+                      </strong>
+                      <span
+                        style={{
+                          fontSize: "11px",
+                          fontWeight: 700,
+                          padding: "2px 8px",
+                          borderRadius: "var(--radius-pill)",
+                          backgroundColor: scanData.scanCount === 1 ? "#dcfce7" : "#fef3c7",
+                          color: scanData.scanCount === 1 ? "var(--color-success)" : "var(--color-warning)",
+                        }}
+                      >
+                        {scanData.scanCount === 1 ? "Tamper Seal Intact" : "Multiple Scans Observed"}
+                      </span>
+                    </div>
+                    <p style={{ margin: 0, fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
+                      {scanData.scanCount === 1
+                        ? "This is the very first time this unit's unique QR code was scanned. The serial label has not been previously read."
+                        : `First verified on ${scanData.firstScanTime ? formatDate(scanData.firstScanTime) : "earlier"}. If you are purchasing this unopened from a shelf, consult your pharmacist to confirm this label was not duplicated.`}
+                    </p>
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {/* 3. Multi-tier Packaging Hierarchy Stepper */}
+            {hierarchy.length > 1 && (
+              <Card padding="md">
+                <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", marginBottom: "var(--space-3)" }}>
+                  <Layers size={18} style={{ color: "var(--color-primary)" }} />
+                  <h3 style={{ margin: 0, fontSize: "var(--text-base)", fontWeight: 700, color: "var(--color-text-main)" }}>
+                    Packaging Lineage Hierarchy
+                  </h3>
+                </div>
+                <p style={{ margin: "0 0 var(--space-4) 0", fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
+                  Traceability path from bulk shipping container down to your individual retail medicine:
+                </p>
+
+                <div
+                  style={{
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "var(--space-2)",
+                    position: "relative",
+                  }}
+                >
+                  {hierarchy.map((tier, idx) => {
+                    const isTarget = tier.id === unit.id;
+                    const isRoot = idx === 0;
+
+                    return (
+                      <div
+                        key={tier.id}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          gap: "var(--space-3)",
+                          padding: "var(--space-3)",
+                          borderRadius: "var(--radius-control)",
+                          backgroundColor: isTarget ? "var(--color-bg-subtle)" : "transparent",
+                          border: isTarget
+                            ? "1px solid var(--color-primary)"
+                            : "1px solid var(--color-border-subtle)",
+                        }}
+                      >
+                        <div
+                          style={{
+                            width: "32px",
+                            height: "32px",
+                            borderRadius: "var(--radius-pill)",
+                            backgroundColor: isTarget ? "var(--color-primary)" : "var(--color-bg-subtle)",
+                            color: isTarget ? "#ffffff" : "var(--color-text-muted)",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            flexShrink: 0,
+                          }}
+                        >
+                          {getTierIcon(tier.level)}
+                        </div>
+
+                        <div style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+                            <strong style={{ fontSize: "var(--text-sm)", color: "var(--color-text-main)" }}>
+                              {unitLevelToName(tier.level)} #{tier.id}
+                            </strong>
+                            {isTarget && (
+                              <span
+                                style={{
+                                  fontSize: "10px",
+                                  fontWeight: 700,
+                                  backgroundColor: "var(--color-primary)",
+                                  color: "#ffffff",
+                                  padding: "1px 6px",
+                                  borderRadius: "var(--radius-pill)",
+                                }}
+                              >
+                                Scanned Unit
+                              </span>
+                            )}
+                            {isRoot && (
+                              <span
+                                style={{
+                                  fontSize: "10px",
+                                  fontWeight: 600,
+                                  backgroundColor: "var(--color-bg-subtle)",
+                                  color: "var(--color-text-muted)",
+                                  padding: "1px 6px",
+                                  borderRadius: "var(--radius-pill)",
+                                }}
+                              >
+                                Bulk Origin
+                              </span>
+                            )}
+                          </div>
+                          <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
+                            Custodian: {formatAddress(tier.currentOwner)} · {tier.quantity} units
+                          </span>
+                        </div>
+
+                        <StatusBadge status={tier.status} />
+                      </div>
+                    );
+                  })}
+                </div>
+              </Card>
+            )}
+
+            {/* 4. Batch Specifications Grid */}
             <Card padding="md">
               <h3 style={{ margin: "0 0 var(--space-4) 0", fontSize: "var(--text-base)", fontWeight: 700, color: "var(--color-text-main)" }}>
                 Batch Specifications
@@ -530,7 +901,7 @@ function VerifyContent() {
 
                 <div>
                   <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", display: "block" }}>
-                    Packaging Classification
+                    Packaging Tier
                   </span>
                   <strong style={{ color: "var(--color-text-main)" }}>
                     {unitLevelToName(unit.level)}
@@ -579,7 +950,7 @@ function VerifyContent() {
               </div>
             </Card>
 
-            {/* Custody Parties Card */}
+            {/* 5. Custody Parties Card */}
             <Card padding="md">
               <h3 style={{ margin: "0 0 var(--space-4) 0", fontSize: "var(--text-base)", fontWeight: 700, color: "var(--color-text-main)" }}>
                 Custody & Parties
@@ -649,7 +1020,7 @@ function VerifyContent() {
               </div>
             </Card>
 
-            {/* Chain of Custody Timeline */}
+            {/* 6. Chain of Custody Timeline */}
             <Card padding="md">
               <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", marginBottom: "var(--space-4)" }}>
                 <History size={18} style={{ color: "var(--color-primary)" }} />
@@ -657,6 +1028,9 @@ function VerifyContent() {
                   Chain of Custody Timeline
                 </h3>
               </div>
+              <p style={{ margin: "0 0 var(--space-4) 0", fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
+                Aggregated multi-tier blockchain events across bulk containers and retail medicine:
+              </p>
 
               <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)", paddingLeft: "var(--space-2)" }}>
                 {timeline.map((evt, idx) => (
@@ -678,22 +1052,41 @@ function VerifyContent() {
                             ? "var(--color-danger)"
                             : evt.type === "sold"
                             ? "var(--color-success)"
-                            : "var(--color-primary)",
+                            : evt.isScannedUnit
+                            ? "var(--color-primary)"
+                            : "#94a3b8",
                         marginTop: "5px",
                         flexShrink: 0,
                       }}
                     />
                     <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
-                      <strong style={{ fontSize: "var(--text-sm)", color: "var(--color-text-main)" }}>
-                        {evt.title}
-                      </strong>
+                      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+                        <span
+                          style={{
+                            fontSize: "10px",
+                            fontWeight: 700,
+                            padding: "1px 6px",
+                            borderRadius: "var(--radius-pill)",
+                            backgroundColor: evt.isScannedUnit ? "var(--color-primary)" : "var(--color-bg-subtle)",
+                            color: evt.isScannedUnit ? "#ffffff" : "var(--color-text-muted)",
+                          }}
+                        >
+                          {evt.unitLabel}
+                        </span>
+                        <strong style={{ fontSize: "var(--text-sm)", color: "var(--color-text-main)" }}>
+                          {evt.title}
+                        </strong>
+                      </div>
                       <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
                         {evt.description}
                       </span>
                       {evt.timestamp && (
-                        <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", fontVariantNumeric: "tabular-nums" }}>
-                          {formatDate(evt.timestamp)}
-                        </span>
+                        <div style={{ display: "flex", alignItems: "center", gap: "4px", marginTop: "2px" }}>
+                          <Clock size={11} style={{ color: "var(--color-text-muted)" }} />
+                          <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", fontVariantNumeric: "tabular-nums" }}>
+                            {formatDate(evt.timestamp)}
+                          </span>
+                        </div>
                       )}
                       {evt.txHash && (
                         <a
