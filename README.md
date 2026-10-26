@@ -18,8 +18,10 @@ PharmaTree is an enterprise-grade decentralized pharmaceutical supply chain trac
   $$\text{Container} \longrightarrow \text{Shipment} \longrightarrow \text{Batch} \longrightarrow \text{Box} \longrightarrow \text{Individual Item}$$
 - **Two-Party Custody Handshake & Explicit Rejection Flow**: Prevents inventory interception or unilateral dumping. Inbound shipments require explicit mutual acceptance by the authorized recipient. Receivers can reject suspicious or damaged shipments, automatically returning stock to the sender's inventory while recording a transparent on-chain audit trail (`Rejected by 0x...`).
 - **Inventory Partitioning & Detachment**: Supports partial transfers (`initiatePartialTransfer`) and partial retail dispensing (`sellQuantity`), preserving sender remainder while detaching new child units.
-- **Vendor POS QR Scanner Terminal (`/pos`)**: High-throughput kiosk scanner for dispensaries, pharmacies, and end vendors. Supports live camera viewfinder and USB/Bluetooth hardware barcode guns (keyboard-wedge). Features a **5-Tier Anti-Counterfeit Interception Engine** (Genesis registration, Anti-replay double-dispensing block, Anti-diversion custody check, Transit integrity inspection, and Cryptographic scratch-off seal verification), instant gasless on-chain sales via relayer sponsor, and synthesized Web Audio sirens and chimes.
-- **Consumer Verification & QR Audit Trail**: Dedicated public verification portal (`/verify`) allowing anyone to scan a QR code or search a Unit ID to inspect the full chronological chain of custody without needing a crypto wallet.
+- **Vendor POS QR Scanner Terminal (`/pos`)**: High-throughput kiosk scanner for dispensaries, pharmacies, and end vendors. Features single-key fast checkout (press `Spacebar` or `Enter` to dispense in `<500ms`), collapsible tamper seal inspection, dual camera/USB-wedge barcode listeners, gasless relayer transactions, Web Audio synthesizers, and quarantine incident logging.
+- **Role-Adaptive Public Verification (`/verify`)**: 4-Stage interactive visual journey stepper (`Genesis` -> `Handshakes` -> `POS` -> `Patient Check`). Detects connected handler wallets to surface 1-click `[Accept Shipment into Custody]` and `[Reject Damaged / Tampered Shipment]` actions. Automatically triggers alarm siren and flags *"REJECT AS IT IS (DO NOT ACCEPT OR CONSUME)"* if a sold unit is scanned multiple times (anti-photocopy replay).
+- **Defense-in-Depth Security Hardening**: Strict Content Security Policy (CSP), HTTP Strict Transport Security (HSTS), X-Frame-Options (`DENY`), X-Content-Type-Options (`nosniff`), Permissions-Policy, sliding-window in-memory rate limiting (`rateLimit.ts`), input boundary sanitization, and React 19 Client Error Boundaries (`error.tsx`, `global-error.tsx`).
+- **Production Health & Diagnostic Telemetry (`/api/health`)**: Real-time observability endpoint reporting Sepolia RPC latency, latest block number, smart contract availability, unit counters, and gasless relayer solvency.
 - **Resilient Multi-Endpoint Fallback RPC**: Built-in RPC failover engine (`rpc.ts`) with exponential backoff and rate-limit recovery across public Sepolia providers.
 - **Real-Time Next.js 16 Web Dashboard**: Responsive UI with automated MetaMask account detection, reactive donut stock charts, and dynamic role panels.
 
@@ -249,7 +251,7 @@ cd backend && npx hardhat run scripts/agent-production-validator.ts --network se
 - ✅ **Fractional Dispensing Invariant**: Validates mathematical conservation of units ($\Sigma Q = \text{const}$) during `sellQuantity` child unit partitioning.
 
 ### 2. Smart Contract Unit Test Suite
-Run the 21-scenario Chai/Mocha smart contract unit test suite:
+Run the 25-scenario Chai/Mocha smart contract unit test suite:
 
 ```bash
 # Run smart contract unit tests from root

@@ -24,11 +24,15 @@ This repository is structured as an enterprise monorepo containing distinct `bac
 | `backend/contracts/PharmaTree.sol` | Smart contract logic: RBAC, hierarchy, ownership, transfers, partitioning, rejections, and sales |
 | `backend/scripts/` | Sepolia and local Hardhat deployment, role granting, and verification workflows |
 | `backend/scripts/agent-production-validator.ts` | Production test suite validating 8 core anti-counterfeit & dispensing invariants against Sepolia |
-| `backend/test/PharmaTree.test.ts` | Complete Chai/Mocha smart contract unit test suite (21 test cases passing) |
+| `backend/test/PharmaTree.test.ts` | Complete Chai/Mocha smart contract unit test suite (25 test cases passing) |
 | `frontend/src/app/` | Next.js 16 App Router pages (`/`, `/create`, `/admin`, `/transfers`, `/inventory`, `/verify`, `/pos`) |
 | `frontend/src/app/pos/` | High-throughput Vendor POS QR Scanner Terminal with dual camera/HID wedge listeners |
 | `frontend/src/app/api/pos/` | POS backend endpoints: `/verify` (5-tier audit), `/sell` (gasless relayer), `/incident` (quarantine logger) |
-| `frontend/src/app/verify/page.tsx` | Public medicine provenance verification & QR audit trail |
+| `frontend/src/app/api/health/` | Production diagnostic health check endpoint (RPC latency, block height, contract status, relayer solvency) |
+| `frontend/src/app/verify/page.tsx` | Role-adaptive medicine provenance verification, 4-stage visual journey stepper & QR audit trail |
+| `frontend/src/app/error.tsx` | Route-level React 19 error boundary with diagnostics modal and retry action |
+| `frontend/src/app/global-error.tsx` | Root layout catastrophic error boundary with standalone recovery HTML |
+| `frontend/src/lib/rateLimit.ts` | Resilient in-memory sliding-window rate limiter and input sanitization suite |
 | `frontend/src/components/PharmaWalletView.tsx` | Comprehensive reactive wallet dashboard, inventory partitions, rejection UI, and transfer controls |
 | `frontend/src/lib/audio-alerts.ts` | Zero-dependency Web Audio API synthesizer for positive chimes & emergency counterfeit sirens |
 | `frontend/src/hooks/useHardwareBarcodeScanner.ts` | Global keystroke wedge listener for USB/Bluetooth 2D barcode and QR scanner guns |
@@ -521,7 +525,43 @@ Manual dashboard checks:
 7. Try an unauthorized receiver and an over-quantity transfer.
 8. Sell active stock and confirm it cannot be transferred afterward.
 
-## 13. Known limitations & future roadmap
+## 13. Security Hardening & Defense-in-Depth Architecture
+
+PharmaTree implements multi-layered security controls to protect retail kiosk terminals, hospital dispensaries, and consumer verification interfaces:
+
+### 13.1 Strict HTTP Security Headers (`next.config.ts`)
+- **Content-Security-Policy (CSP)**: Disallows unauthorized third-party scripts, inline frame injection, and dangerous object tags (`frame-ancestors 'none'`, `base-uri 'self'`, `object-src 'none'`).
+- **X-Frame-Options: DENY**: Complete clickjacking mitigation.
+- **X-Content-Type-Options: nosniff**: Defends against MIME-confusion attacks.
+- **Strict-Transport-Security (HSTS)**: 2-year HTTPS enforcement (`max-age=63072000; includeSubDomains; preload`).
+- **Permissions-Policy**: Restricts camera access strictly to same-origin kiosk scanner, blocks microphone.
+- **Referrer-Policy: strict-origin-when-cross-origin**: Prevents internal route leaking.
+
+### 13.2 Sliding-Window In-Memory Rate Limiting (`lib/rateLimit.ts`)
+Protects against brute-force unit ID scanning and RPC node exhaustion:
+- State-changing POS dispensing (`/api/pos/sell`): 30 requests / minute per IP.
+- Anti-counterfeit verification (`/api/pos/verify`): 120 requests / minute per IP.
+- Incident quarantine reporting (`/api/pos/incident`): 60 requests / minute per IP.
+- Consumer scan recording (`/api/scan`): 120 requests / minute per IP.
+- Returns RFC-compliant rate limit headers (`X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, `Retry-After`).
+
+### 13.3 Input Boundary Validation & Sanitization
+- Bounded integer validation: Strict `parseSafePositiveInt` bounds ($1 \le \text{unitId} \le 2^{53}-1$).
+- XSS and Control Character Stripping: Strips ASCII control codes (`[\x00-\x1F\x7F]`) and entity-encodes `<>&"'` across freeform text fields.
+- Ethereum Address Validation: Verifies hexadecimal addresses match `/^0x[0-9a-fA-F]{40}$/`.
+
+### 13.4 Production Health Diagnostics Endpoint (`/api/health`)
+Provides live system telemetry for automated uptime monitoring (DataDog, Prometheus, AWS Route53):
+- **RPC Availability & Latency**: Tests connectivity to Sepolia nodes and reports millisecond round-trip time.
+- **Contract Operability**: Queries live unit count on `0x7c40b82B39346A56Ba69df52A37eBBDfF541b198`.
+- **Relayer Solvency**: Checks gasless relayer balance (`0x6537...1537`), verifying it holds $>0.005$ ETH for transaction sponsorship without exposing private keys.
+- **Runtime Metrics**: Reports memory RSS, heap usage, and server uptime.
+
+### 13.5 React 19 Client Error Boundaries
+- **`app/error.tsx`**: Catches route-level rendering exceptions, displaying diagnostic error digests with a one-click "Retry Operation" trigger.
+- **`app/global-error.tsx`**: Catches root layout disruptions, presenting a standalone emergency recovery layout.
+
+## 14. Known limitations & future roadmap
 
 - `frontend/src/lib/ipfs.ts` formats metadata locally; production decentralized pinning can be integrated with server-side Pinata/IPFS API endpoints.
 - Unit reads iterate through the contract's unit counter with cached log enrichment. In enterprise high-volume settings, an indexing subgraph (The Graph) or indexed event cache would scale querying.

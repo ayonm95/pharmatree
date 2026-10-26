@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import fs from "fs";
 import path from "path";
+import {
+  checkRateLimit,
+  getRateLimitHeaders,
+  parseSafePositiveInt,
+} from "@/lib/rateLimit";
 
 type ScanRecord = {
   scanCount: number;
@@ -47,42 +52,85 @@ try {
 }
 
 export async function GET(req: NextRequest) {
+  const rateLimit = checkRateLimit(req, {
+    limit: 120,
+    windowMs: 60 * 1000,
+    prefix: "scan-get",
+  });
+  const rateHeaders = getRateLimitHeaders(rateLimit);
+
+  if (!rateLimit.allowed) {
+    return NextResponse.json(
+      { error: "RATE_LIMITED", message: "Too many scan lookups." },
+      { status: 429, headers: rateHeaders }
+    );
+  }
+
   const { searchParams } = new URL(req.url);
-  const unitId = searchParams.get("unitId");
+  const rawId = searchParams.get("unitId");
+  const unitId = parseSafePositiveInt(rawId);
 
   if (!unitId) {
-    return NextResponse.json({ error: "Missing unitId query parameter" }, { status: 400 });
+    return NextResponse.json(
+      { error: "Missing or invalid unitId query parameter" },
+      { status: 400, headers: rateHeaders }
+    );
   }
 
-  const existing = memoryCache[unitId];
+  const key = String(unitId);
+  const existing = memoryCache[key];
   if (existing) {
-    return NextResponse.json({
-      unitId,
-      scanCount: existing.scanCount,
-      firstScanTime: existing.firstScanTime,
-      lastScanTime: existing.lastScanTime,
-      isFirstScan: false,
-    });
+    return NextResponse.json(
+      {
+        unitId: key,
+        scanCount: existing.scanCount,
+        firstScanTime: existing.firstScanTime,
+        lastScanTime: existing.lastScanTime,
+        isFirstScan: false,
+      },
+      { headers: rateHeaders }
+    );
   }
 
-  return NextResponse.json({
-    unitId,
-    scanCount: 0,
-    firstScanTime: null,
-    lastScanTime: null,
-    isFirstScan: true,
-  });
+  return NextResponse.json(
+    {
+      unitId: key,
+      scanCount: 0,
+      firstScanTime: null,
+      lastScanTime: null,
+      isFirstScan: true,
+    },
+    { headers: rateHeaders }
+  );
 }
 
 export async function POST(req: NextRequest) {
+  const rateLimit = checkRateLimit(req, {
+    limit: 60,
+    windowMs: 60 * 1000,
+    prefix: "scan-post",
+  });
+  const rateHeaders = getRateLimitHeaders(rateLimit);
+
+  if (!rateLimit.allowed) {
+    return NextResponse.json(
+      { error: "RATE_LIMITED", message: "Scan recording threshold reached." },
+      { status: 429, headers: rateHeaders }
+    );
+  }
+
   try {
     const body = await req.json();
-    const unitId = String(body.unitId || "").trim();
+    const parsedId = parseSafePositiveInt(body.unitId);
 
-    if (!unitId) {
-      return NextResponse.json({ error: "Missing unitId in body" }, { status: 400 });
+    if (!parsedId) {
+      return NextResponse.json(
+        { error: "Missing or invalid unitId in body" },
+        { status: 400, headers: rateHeaders }
+      );
     }
 
+    const unitId = String(parsedId);
     const now = Math.floor(Date.now() / 1000);
     const existing = memoryCache[unitId];
 
@@ -104,14 +152,20 @@ export async function POST(req: NextRequest) {
     memoryCache[unitId] = record;
     saveToDisk(memoryCache);
 
-    return NextResponse.json({
-      unitId,
-      scanCount: record.scanCount,
-      firstScanTime: record.firstScanTime,
-      lastScanTime: record.lastScanTime,
-      isFirstScan: record.scanCount === 1,
-    });
+    return NextResponse.json(
+      {
+        unitId,
+        scanCount: record.scanCount,
+        firstScanTime: record.firstScanTime,
+        lastScanTime: record.lastScanTime,
+        isFirstScan: record.scanCount === 1,
+      },
+      { headers: rateHeaders }
+    );
   } catch (err: any) {
-    return NextResponse.json({ error: err.message || "Failed to record scan" }, { status: 500 });
+    return NextResponse.json(
+      { error: err.message || "Failed to record scan" },
+      { status: 500, headers: rateHeaders }
+    );
   }
 }
