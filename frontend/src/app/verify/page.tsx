@@ -30,7 +30,6 @@ import {
   History,
   Plus,
   ShieldCheck,
-  ShieldAlert,
   Layers,
   Clock,
   Eye,
@@ -198,7 +197,6 @@ function VerifyContent() {
       setTimeline([]);
       setScanData(null);
 
-      let fetchedScan: ScanRecord | null = null;
       // 1. Post to scan tracking API
       try {
         const scanRes = await fetch("/api/scan", {
@@ -209,7 +207,6 @@ function VerifyContent() {
         if (scanRes.ok) {
           const scanJson = await scanRes.json();
           if (!cancelled && scanJson.scanCount) {
-            fetchedScan = scanJson;
             setScanData(scanJson);
           }
         }
@@ -275,11 +272,7 @@ function VerifyContent() {
 
         // Sound cues for consumer/handler
         if (soundEnabledRef.current) {
-          if (loadedUnit.status === 2 && fetchedScan && fetchedScan.scanCount > 1) {
-            playSirenAlarm();
-          } else if (loadedUnit.status === 2) {
-            playBeepSuccess();
-          } else if (loadedUnit.status === 3) {
+          if (loadedUnit.status === 3) {
             playSirenAlarm();
           } else {
             playBeepSuccess();
@@ -876,38 +869,38 @@ function VerifyContent() {
               </div>
             </Card>
 
-            {/* 2. Critical Replay Rejection Warning Banner */}
+            {/* 2. Rescan Notice & Integrity Advisory */}
             {isSold && scanData && scanData.scanCount > 1 && (
               <Card
                 padding="md"
                 style={{
-                  border: "2px solid var(--color-danger)",
-                  backgroundColor: "var(--color-danger-subtle)",
+                  border: "1px solid var(--color-warning-border, #fcd34d)",
+                  backgroundColor: "var(--color-warning-subtle, #fefce8)",
                 }}
               >
                 <div style={{ display: "flex", alignItems: "flex-start", gap: "var(--space-3)" }}>
-                  <ShieldAlert size={28} style={{ color: "var(--color-danger)", flexShrink: 0, marginTop: "2px" }} />
+                  <AlertTriangle size={24} style={{ color: "var(--color-warning, #d97706)", flexShrink: 0, marginTop: "2px" }} />
                   <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
                     <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap" }}>
-                      <strong style={{ fontSize: "var(--text-base)", color: "var(--color-danger)" }}>
-                        REJECT AS IT IS (DO NOT ACCEPT OR CONSUME)
+                      <strong style={{ fontSize: "var(--text-sm)", color: "var(--color-text-main)" }}>
+                        Notice: Previous Scans Recorded
                       </strong>
                       <span
                         style={{
                           fontSize: "11px",
-                          fontWeight: 800,
+                          fontWeight: 700,
                           padding: "2px 8px",
                           borderRadius: "var(--radius-pill)",
-                          backgroundColor: "#fee2e2",
-                          color: "var(--color-danger)",
-                          border: "1px solid var(--color-danger-border)",
+                          backgroundColor: "#fef3c7",
+                          color: "#b45309",
+                          border: "1px solid #fde68a",
                         }}
                       >
-                        {scanData.scanCount} Duplicate Scans
+                        Scanned {scanData.scanCount} times
                       </span>
                     </div>
-                    <p style={{ margin: "4px 0 0", fontSize: "var(--text-xs)", color: "var(--color-text-main)", lineHeight: 1.5 }}>
-                      <strong>CRITICAL SAFETY WARNING:</strong> This medicine was already sold on Ethereum Sepolia and this QR code has been read {scanData.scanCount} times. Counterfeiters commonly photograph genuine sold packaging and print duplicate stickers onto fake or dangerous medicines. <strong>If you did not personally purchase this from the authorized pharmacy, this package is compromised. Refuse to accept it.</strong>
+                    <p style={{ margin: "4px 0 0", fontSize: "var(--text-xs)", color: "var(--color-text-muted)", lineHeight: 1.5 }}>
+                      This medicine was registered as dispensed on Ethereum Sepolia. If you or a family member scanned this item previously, this count is expected. If you are examining an unpurchased box in a retail setting, verify that the packaging and physical scratch seal remain unopened and authentic.
                     </p>
                   </div>
                 </div>

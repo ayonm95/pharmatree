@@ -243,7 +243,7 @@ export function useWalletActions({
         const reason = err?.reason || err?.message || "";
         if (reason.includes("missing revert data") || reason.includes("CALL_EXCEPTION") || reason.includes("reclaimRejectedUnit")) {
           notify(
-            "Contract Notice: The deployed contract (0x2bAE...) does not support reclaiming. Rejected units remain permanently archived as Rejected on-chain.",
+            "Contract Notice: The connected contract does not support reclaiming. Rejected units remain permanently archived as Rejected on-chain.",
             "error"
           );
         } else {

@@ -1,13 +1,14 @@
 # PharmaTree ✚
-### Immutable Blockchain-Based Pharmaceutical Supply Chain Tracking & Verification Engine
+### Decentralized Pharmaceutical Supply Chain Tracking & Verification Engine
 
+[![PharmaTree CI](https://github.com/ayonm95/pharmatree/actions/workflows/ci.yml/badge.svg)](https://github.com/ayonm95/pharmatree/actions/workflows/ci.yml)
+[![Live Demo](https://img.shields.io/badge/Demo-Vercel%20Live-black?logo=vercel)](https://pharmatree.vercel.app)
 [![Solidity](https://img.shields.io/badge/Solidity-0.8.20-blue?logo=solidity)](https://soliditylang.org/)
-[![Ethereum](https://img.shields.io/badge/Ethereum-Sepolia%20Testnet-627EEA?logo=ethereum)](https://sepolia.etherscan.io/)
+[![Ethereum](https://img.shields.io/badge/Ethereum-Sepolia%20Testnet-627EEA?logo=ethereum)](https://sepolia.etherscan.io/address/0x7c40b82B39346A56Ba69df52A37eBBDfF541b198)
 [![Next.js](https://img.shields.io/badge/Next.js-16.4.3-black?logo=next.js)](https://nextjs.org/)
-[![Ethers.js](https://img.shields.io/badge/Ethers.js-v6-purple)](https://docs.ethers.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
-PharmaTree is an enterprise-grade decentralized pharmaceutical supply chain tracking platform designed to eliminate counterfeit medicines, secure chain of custody, and provide instant consumer authenticity verification through cryptographic proof on the Ethereum blockchain.
+PharmaTree is a decentralized pharmaceutical supply chain tracking platform designed to provide tamper-evident provenance, verifiable custody handshakes, zero double-dispensing, and instant consumer authenticity verification through cryptographic proof on the Ethereum blockchain.
 
 ---
 
@@ -19,7 +20,7 @@ PharmaTree is an enterprise-grade decentralized pharmaceutical supply chain trac
 - **Two-Party Custody Handshake & Explicit Rejection Flow**: Prevents inventory interception or unilateral dumping. Inbound shipments require explicit mutual acceptance by the authorized recipient. Receivers can reject suspicious or damaged shipments, automatically returning stock to the sender's inventory while recording a transparent on-chain audit trail (`Rejected by 0x...`).
 - **Inventory Partitioning & Detachment**: Supports partial transfers (`initiatePartialTransfer`) and partial retail dispensing (`sellQuantity`), preserving sender remainder while detaching new child units.
 - **Vendor POS QR Scanner Terminal (`/pos`)**: High-throughput kiosk scanner for dispensaries, pharmacies, and end vendors. Features single-key fast checkout (press `Spacebar` or `Enter` to dispense in `<500ms`), collapsible tamper seal inspection, dual camera/USB-wedge barcode listeners, gasless relayer transactions, Web Audio synthesizers, and quarantine incident logging.
-- **Role-Adaptive Public Verification (`/verify`)**: 4-Stage interactive visual journey stepper (`Genesis` -> `Handshakes` -> `POS` -> `Patient Check`). Detects connected handler wallets to surface 1-click `[Accept Shipment into Custody]` and `[Reject Damaged / Tampered Shipment]` actions. Automatically triggers alarm siren and flags *"REJECT AS IT IS (DO NOT ACCEPT OR CONSUME)"* if a sold unit is scanned multiple times (anti-photocopy replay).
+- **Role-Adaptive Public Verification (`/verify`)**: 4-Stage interactive visual journey stepper (`Genesis` -> `Handshakes` -> `POS` -> `Patient Check`). Detects connected handler wallets to surface 1-click `[Accept Shipment into Custody]` and `[Reject Damaged / Tampered Shipment]` actions, while providing clear, nuanced scan history telemetry.
 - **Defense-in-Depth Security Hardening**: Strict Content Security Policy (CSP), HTTP Strict Transport Security (HSTS), X-Frame-Options (`DENY`), X-Content-Type-Options (`nosniff`), Permissions-Policy, sliding-window in-memory rate limiting (`rateLimit.ts`), input boundary sanitization, and React 19 Client Error Boundaries (`error.tsx`, `global-error.tsx`).
 - **Production Health & Diagnostic Telemetry (`/api/health`)**: Real-time observability endpoint reporting Sepolia RPC latency, latest block number, smart contract availability, unit counters, and gasless relayer solvency.
 - **Resilient Multi-Endpoint Fallback RPC**: Built-in RPC failover engine (`rpc.ts`) with exponential backoff and rate-limit recovery across public Sepolia providers.
@@ -50,7 +51,7 @@ flowchart TD
     end
 
     subgraph Blockchain["Ethereum Sepolia Testnet"]
-        Contract["PharmaTree.sol (0x2bAE...044)"]
+        Contract["PharmaTree.sol (0x7c40...198)"]
         RBAC["Access Control Matrix"]
         Units["Unit Registry & Partitions"]
         Events["Audit Log (UnitCreated, TransferInitiated, TransferRejected, etc.)"]
@@ -233,15 +234,15 @@ Open [http://localhost:3000](http://localhost:3000) for the main dashboard or [h
 
 ## 🧪 Testing & Quality Assurance
 
-### 1. Sepolia Live Production Invariant Suite (`agent-production-validator`)
+### 1. Sepolia Live Invariant Suite (`e2e-sepolia-validation.ts`)
 Validates real on-chain behavior against Ethereum Sepolia without mocks:
 
 ```bash
-cd backend && npx hardhat run scripts/agent-production-validator.ts --network sepolia
+cd backend && npx hardhat run scripts/e2e-sepolia-validation.ts --network sepolia
 ```
 
-**Empirical Truth Score: 1.000 / 1.000 ⭐ PRODUCTION READY**
-- ✅ **Relayer Solvency Check**: Relayer holds >1.2 ETH on Sepolia for sponsoring gasless POS transactions.
+**Result: 8/8 live Sepolia invariant checks passing ✅**
+- ✅ **Relayer Solvency Check**: Relayer holds >1.2 ETH on Sepolia for sponsoring gasless POS transactions (threshold $\ge 0.005$ ETH).
 - ✅ **Tier 1 (Genesis Registration)**: Validates legitimate origin of Unit #1 under manufacturer `0x6537...1537`.
 - ✅ **Tier 1 (Forged QR Interception)**: Scanned fake Unit #9999 intercepted as `UNREGISTERED_ID`.
 - ✅ **Tier 2 (Anti-Replay / Double-Dispensing)**: Sold Unit #2 with `Status.Sold` strictly blocked from re-dispensing (`ALREADY_SOLD_REPLAY`).
@@ -249,6 +250,14 @@ cd backend && npx hardhat run scripts/agent-production-validator.ts --network se
 - ✅ **Tier 4 (Transit Integrity)**: Halts checkout if a unit was marked as `Status.Rejected` during delivery.
 - ✅ **Tier 5 (Physical 2FA Scratch Seal)**: Validates single-use 4-digit PIN matching cryptographic manufacturer salt.
 - ✅ **Fractional Dispensing Invariant**: Validates mathematical conservation of units ($\Sigma Q = \text{const}$) during `sellQuantity` child unit partitioning.
+
+---
+
+## 🛡️ Threat Model & Realistic Boundaries
+
+- **The "Garbage In, Garbage Out" Reality Gap**: The Ethereum ledger guarantees tamper-evident provenance and non-repudiation of transactions once recorded. However, it cannot chemically analyze physical medication. If a compromised manufacturer inputs fraudulent metadata at genesis, the ledger faithfully records the history of a counterfeit. Physical quality controls and regulatory inspections remain vital prerequisites.
+- **Physical Cloning vs. Digital Uniqueness**: Anyone can photocopy a physical QR label. PharmaTree enforces that a single on-chain unit cannot be sold twice (anti-replay); however, to prevent pre-sale deception, physical packaging must incorporate tamper-evident break foils and randomized scratch seals.
+- **Public Chain Privacy**: Supply chain flow volume and custody handshakes are public on Ethereum Sepolia. For enterprise commercial confidentiality, zero-knowledge proofs (zk-SNARKs) or private consortium subnets should be used.
 
 ### 2. Smart Contract Unit Test Suite
 Run the 25-scenario Chai/Mocha smart contract unit test suite:

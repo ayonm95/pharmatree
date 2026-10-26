@@ -33,10 +33,10 @@ A production-grade Web3 supply-chain management dashboard and public verificatio
 ## ⚙️ Environment Configuration (`frontend/.env.local`)
 
 ```env
-NEXT_PUBLIC_PHARMA_TREE_CONTRACT=0x2bAE15834463a657F68673135B8deCd39EF33044
+NEXT_PUBLIC_PHARMA_TREE_CONTRACT=0x7c40b82B39346A56Ba69df52A37eBBDfF541b198
 NEXT_PUBLIC_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
 NEXT_PUBLIC_CHAIN_ID=11155111
-NEXT_PUBLIC_DEPLOYMENT_BLOCK=11683269
+NEXT_PUBLIC_DEPLOYMENT_BLOCK=11995000
 ```
 
 ---

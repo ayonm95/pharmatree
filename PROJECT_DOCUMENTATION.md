@@ -51,7 +51,7 @@ flowchart LR
     UI -->|Resilient Fallback Reads| RPC[Multi-Endpoint RPC Pool]
     UI -->|Signed Transactions| MM
     MM -->|Submit Tx| RPC
-    RPC --> C[PharmaTree.sol (0x7c40...198)]
+    RPC --> C["PharmaTree.sol (0x7c40...198)"]
     C --> S[On-chain Unit State & Partitions]
     C --> E[Immutable Audit Events]
     UI --> H[Activity & Inventory Partitions]
@@ -68,7 +68,7 @@ flowchart TB
     Wallet --> Signer[MetaMask Signer]
     Wallet --> ABI[ABI & Enum Mappings]
     Wallet --> Metadata[Metadata Helper]
-    Provider --> Contract[PharmaTree.sol (0x7c40...198)]
+    Provider --> Contract["PharmaTree.sol (0x7c40...198)"]
     Signer --> Contract
     Contract --> Roles[Access Control Matrix]
     Contract --> Units[Lineage & Stock Partitions]
@@ -202,7 +202,7 @@ PharmaTree provides an open verification portal enabling consumers, pharmacies, 
 flowchart LR
     Pack[Medicine Package / Batch] --> QR[Scannable QR Code]
     QR --> Mobile[Phone camera or browser]
-    Mobile --> Page[/verify?unitId=X]
+    Mobile --> Page["/verify?unitId=X"]
     Page --> RPC[Sepolia JSON-RPC read]
     RPC --> SmartContract[PharmaTree.sol]
     SmartContract --> Audit[Authenticity Badge + Custody Timeline + Etherscan Links]
@@ -429,101 +429,99 @@ Use chain ID `11155111` and the Sepolia RPC URL for Sepolia. Never commit
 
 ## 10. Local development
 
+### 10.1 Environment Setup
+1. **Root & Backend Environment**:
+   Copy `.env.example` to `backend/.env` and provide your testnet keys:
+   ```bash
+   cp .env.example backend/.env
+   ```
+2. **Frontend Environment**:
+   Copy `frontend/.env.local.example` (or use `.env.example`) to `frontend/.env.local`:
+   ```bash
+   cp frontend/.env.local.example frontend/.env.local
+   ```
+
+### 10.2 Install and Run Tests
 From the repository root:
 
 ```bash
+# Install root and workspace dependencies
 npm install
+
+# Compile contracts in backend
 npm run compile
+
+# Run smart contract unit test suite (25 test cases)
 npm test
 ```
 
-Start the local chain:
+### 10.3 Run Local Node & Frontend Dashboard
+1. Start the Hardhat local node:
+   ```bash
+   cd backend && npx hardhat node
+   ```
+2. In a second terminal, deploy to the local network:
+   ```bash
+   cd backend && npx hardhat run scripts/deploy.ts --network localhost
+   ```
+3. Update `NEXT_PUBLIC_PHARMA_TREE_CONTRACT` in `frontend/.env.local` with the deployed address.
+4. Start the Next.js development server:
+   ```bash
+   npm run dev
+   ```
+5. Open <http://localhost:3000> in your browser.
+
+## 11. Sepolia deployment & live scripts
+
+To deploy and configure on the Ethereum Sepolia testnet:
 
 ```bash
-npm run node
-```
-
-In another terminal, deploy the contract:
-
-```bash
-npx hardhat run scripts/deploy.ts --network localhost
-```
-
-Set the printed address in `.env.local`, connect MetaMask to
-`http://127.0.0.1:8545` with chain ID `31337`, import a funded Hardhat account,
-and start the dashboard:
-
-```bash
-npm run dev
-```
-
-Open <http://localhost:3000>.
-
-## 11. Sepolia deployment
-
-After filling the required values in `.env`:
-
-```bash
+# Deploy contract to Sepolia
 npm run deploy:sepolia
-npm run deploy:fresh-manufacturer
-npm run verify:sepolia
-npm run verify:sepolia-two-wallet
+
+# Grant distributor/handler roles
+cd backend && npx hardhat run scripts/grant-roles.ts --network sepolia
+
+# Execute end-to-end multi-party transfer flows
+cd backend && npx hardhat run scripts/sepolia-one-click-flow.ts --network sepolia
+cd backend && npx hardhat run scripts/sepolia-two-wallet-flow.ts --network sepolia
 ```
 
-The fresh manufacturer script deploys a new contract, assigns the manufacturer
-role, and updates the local contract address/deployment block configuration.
-Use a dedicated Sepolia test wallet with no real funds.
+Always use dedicated testnet wallets with non-real funds.
 
-## 12. Validation & Production Quality Assurance
+## 12. Validation & Quality Assurance
 
-### Automated Testing & Linting:
+### 12.1 Automated Testing & Linting:
 
 ```bash
-npm run compile
+# Smart contract unit tests (25 test cases passing)
 npm test
+
+# Frontend code quality & types
 npm run lint
+
+# Production Next.js build
 npm run build
 ```
 
-### Production Sepolia Live Validation Suite:
-Execute real-world on-chain invariant testing against Ethereum Sepolia without mocks:
+### 12.2 E2E Sepolia Live Invariant Validation Suite:
+Execute real-world on-chain invariant testing against the live Sepolia contract without mocks:
 
 ```bash
-cd backend && npx hardhat run scripts/agent-production-validator.ts --network sepolia
+cd backend && npx hardhat run scripts/e2e-sepolia-validation.ts --network sepolia
 ```
 
-The production validator suite verifies 8 mission-critical operational invariants:
-1. **Relayer Solvency**: Verifies gas sponsorship wallet holds sufficient Sepolia ETH (>1.0 ETH).
+The validation suite verifies 8 operational invariants:
+1. **Relayer Gas Solvency**: Verifies gas sponsorship wallet holds sufficient Sepolia ETH ($\ge 0.005$ ETH threshold).
 2. **Tier 1 (Genesis Registration)**: Validates legitimate origin of active Unit #1 under authorized manufacturer `0x6537...1537`.
-3. **Tier 1 (Forged QR Interception)**: Verifies out-of-bounds scanned unit (e.g. Unit #9999) is intercepted as `UNREGISTERED_ID` and triggers quarantine sirens.
-4. **Tier 2 (Anti-Replay / Double-Dispensing)**: Verifies that previously sold units (Unit #2 with `Status.Sold`) are strictly blocked from re-sale (`ALREADY_SOLD_REPLAY`).
+3. **Tier 1 (Forged QR Interception)**: Verifies out-of-bounds scanned unit (e.g. Unit #9999) is intercepted as `UNREGISTERED_ID` and triggers quarantine alert.
+4. **Tier 2 (Anti-Replay / Already-Sold)**: Verifies that previously sold units (Unit #2 with `Status.Sold`) are strictly blocked from re-sale (`ALREADY_SOLD_REPLAY`).
 5. **Tier 3 (Anti-Diversion & Custody Mismatch)**: Verifies that stock belonging to another distributor (Unit #8) flags unauthorized custody diversion when scanned by a different vendor.
 6. **Tier 4 (Transit Integrity)**: Halts checkout if a unit was flagged with `Status.Rejected` (contaminated or broken seal).
 7. **Tier 5 (Physical 2FA Scratch Seal)**: Verifies that only authentic cryptographic scratch PINs matching manufacturer salt pass, while counterfeit PINs fail.
 8. **Fractional Dispensing Invariant**: Validates conservation of medication units ($\Sigma Q = \text{const}$) during `sellQuantity` child unit partitioning.
 
-**Empirical Truth Score: 1.000 / 1.000 ⭐ PRODUCTION READY** (8/8 tests passed).
-
-### Smart Contract Unit Test Suite:
-The contract unit test suite (`backend/test/PharmaTree.test.ts`) covers:
-- Admin and role authorization.
-- Root and child unit creation.
-- Partial quantity transfers.
-- Parent/child packing authorization.
-- Transfer acceptance and rejection.
-- Ownership changes.
-- Sale detachment and transfer prevention.
-
-Manual dashboard checks:
-
-1. Connect a manufacturer wallet.
-2. Create medicine and confirm it appears in Overview and Inventory.
-3. Grant a handler role.
-4. Transfer a full quantity and accept it from the handler wallet.
-5. Transfer a partial quantity and verify the sender remainder.
-6. Confirm handler inventory uses separate local unit numbers.
-7. Try an unauthorized receiver and an over-quantity transfer.
-8. Sell active stock and confirm it cannot be transferred afterward.
+**Result: 8/8 live Sepolia invariant checks passing ✅**
 
 ## 13. Security Hardening & Defense-in-Depth Architecture
 
@@ -561,28 +559,82 @@ Provides live system telemetry for automated uptime monitoring (DataDog, Prometh
 - **`app/error.tsx`**: Catches route-level rendering exceptions, displaying diagnostic error digests with a one-click "Retry Operation" trigger.
 - **`app/global-error.tsx`**: Catches root layout disruptions, presenting a standalone emergency recovery layout.
 
-## 14. Known limitations & future roadmap
+## 14. Threat Model & System Boundaries (What Blockchain Doesn't Solve)
 
-- `frontend/src/lib/ipfs.ts` formats metadata locally; production decentralized pinning can be integrated with server-side Pinata/IPFS API endpoints.
-- Unit reads iterate through the contract's unit counter with cached log enrichment. In enterprise high-volume settings, an indexing subgraph (The Graph) or indexed event cache would scale querying.
-- Contract addresses and network settings are supplied through environment variables and validated against the connected MetaMask network.
+A decentralized ledger provides tamper-evident provenance and immutable audit trails, but it is not a silver bullet. Understanding the system's realistic trust boundaries is essential for real-world deployment:
 
-## 14. Security and public release
+```mermaid
+flowchart TD
+    subgraph Physical_World["Physical Reality (Off-Chain)"]
+        RawMaterial["Active Pharmaceutical Ingredients (API)"]
+        Pills["Physical Medication & Packaging"]
+        TamperSeal["Physical Foil / Hologram"]
+    end
+
+    subgraph The_Oracle_Gap["The 'Garbage In, Garbage Out' Gap"]
+        Gap["⚠️ Blockchain cannot chemically test physical pills.<br>Bad data entered by a malicious manufacturer remains immutably recorded."]
+    end
+
+    subgraph Blockchain_World["Digital Cryptographic State (On-Chain)"]
+        Genesis["UnitCreated(id, mfr)"]
+        Custody["Two-Party Handshake: Active -> Pending -> Accepted"]
+        TerminalSale["Dispensed: Status.Sold (Zero Double-Spend)"]
+    end
+
+    Physical_World -.-> Gap
+    Gap -.-> Blockchain_World
+```
+
+### 14.1 The Physical-to-Digital Reality Gap ("Garbage In, Garbage Out")
+The blockchain guarantees that once an entry is recorded, it cannot be secretly altered or deleted. However, **it cannot verify whether physical substances placed inside a bottle match the registered metadata**. If an authorized manufacturer enters fraudulent batches at genesis, the ledger faithfully records the provenance of an illegitimate product. Regulatory oversight, laboratory inspections, and factory floor sensor oracles remain mandatory prerequisites.
+
+### 14.2 Physical Packaging Cloning vs. Digital Verification
+A physical QR code printed on cardboard can be photocopied. While PharmaTree detects replayed sales on-chain (preventing the same digital unit ID from being sold twice), a photocopied code on counterfeit packaging could deceive an unassisted consumer prior to the authentic item's sale. For complete defense, digital serialization must be paired with physical anti-tampering (such as tamper-evident break seals and cryptographically randomized scratch-off PINs).
+
+### 14.3 State Machine for Inbound Shipments & Rejection
+When an inbound shipment is rejected due to suspected tampering or cold-chain excursion, the stock transitions to `Status.Rejected`:
+
+```mermaid
+stateDiagram-v2
+    [*] --> Active: Manufacturer Mints Unit
+    Active --> PendingTransfer: Sender calls initiateTransfer
+    PendingTransfer --> Active: Receiver calls acceptTransfer
+    PendingTransfer --> Rejected: Receiver calls rejectTransfer (damaged/tampered)
+    PendingTransfer --> Active: Sender calls cancelTransfer
+    Rejected --> Quarantined: Flagged in Incident Registry
+    Quarantined --> Destroyed: Physical Destruction Logged
+    Quarantined --> Active: QA Inspection Clearance
+    Active --> Sold: Dispensed at POS (Final State)
+    Sold --> [*]
+```
+
+In production pharma operations, rejected items should not immediately be returned to general active inventory without formal QA clearance.
+
+### 14.4 Public Ledger Privacy Trade-offs
+Because transactions occur on a public Ethereum network:
+- **Commercial Competitors**: Competitors can observe shipment quantities, transfer velocities, and wallet relationships between suppliers and distributors. Enterprise deployments should employ zero-knowledge proofs (e.g. zk-SNARKs) or private consortium subnets to conceal volume data while preserving verifiable proofs.
+- **Incident Telemetry**: POS incident logs collecting browser geolocation coordinates must adhere to healthcare data privacy standards (HIPAA / GDPR) by obfuscating exact pharmacy addresses.
+
+### 14.5 Serverless Persistence Considerations
+In serverless environments (like Vercel), in-memory rate limiting and local `.data/*.json` files are ephemeral and reset across cold starts. Production deployment requires external persistence:
+- **Database**: PostgreSQL (e.g. Supabase, Neon) for permanent incident logs and scan telemetry.
+- **Rate Limiting**: Distributed Redis (e.g. Upstash) for synchronized cross-region IP rate limiting.
+
+## 15. Security and public release
 
 - Keep all secrets in ignored local environment files (`.env`, `.env.local`).
-- Use placeholder values in committed templates (`.env.example`, `.env.local.example`).
+- Use placeholder values in committed templates (`.env.example`, `frontend/.env.local.example`).
 - Do not expose private keys in scripts, screenshots, logs, issues, or commits.
 - Use a dedicated test wallet for local and Sepolia automation.
-- Rotate any credential that may have been exposed.
+- In production, separate the hot gasless relayer wallet from administrative roles and govern the contract admin via a multi-signature safe (e.g., Safe).
 
-## 15. Author and project links
+## 16. Author and project links
 
 **Ayon Moitra**
 
 - GitHub: [@ayonm95](https://github.com/ayonm95)
-- Repositories:
-  - [Pharma (Monorepo)](https://github.com/ayonm95/Pharma)
-  - [pharmatree (Public Mirror)](https://github.com/ayonm95/pharmatree)
+- Public Repository: [pharmatree](https://github.com/ayonm95/pharmatree)
+- Monorepo: [Pharma](https://github.com/ayonm95/Pharma)
 - LinkedIn: [Ayon Moitra](https://www.linkedin.com/in/ayon-moitra/)
 
 This project is distributed under the [MIT License](./LICENSE).

@@ -10,8 +10,8 @@ The smart contract foundation of the **PharmaTree** decentralized pharmaceutical
 | :--- | :--- |
 | **Network** | Ethereum Sepolia Testnet |
 | **Chain ID** | `11155111` |
-| **Contract Address** | [`0x2bAE15834463a657F68673135B8deCd39EF33044`](https://sepolia.etherscan.io/address/0x2bAE15834463a657F68673135B8deCd39EF33044) |
-| **Deployment Block** | `11683269` |
+| **Contract Address** | [`0x7c40b82B39346A56Ba69df52A37eBBDfF541b198`](https://sepolia.etherscan.io/address/0x7c40b82B39346A56Ba69df52A37eBBDfF541b198) |
+| **Deployment Block** | `11995000` |
 | **Compiler Version** | `v0.8.20+commit.a1b79de6` |
 
 ---
@@ -28,14 +28,15 @@ The smart contract foundation of the **PharmaTree** decentralized pharmaceutical
   - `initiateTransfer(unitId, receiver)`: Transfers full unit quantity to pending state.
   - `initiatePartialTransfer(unitId, receiver, quantity)`: Splits available quantity, preserving sender remainder and minting a child unit with inherited parent/root lineage.
   - `acceptTransfer(unitId)`: Authorized recipient accepts custody, transitioning state to `Active`.
-  - `rejectTransfer(unitId)`: Authorized recipient rejects inbound shipment, clearing pending receiver back to `address(0)` while retaining sender ownership and restoring available inventory.
+  - `rejectTransfer(unitId)`: Authorized recipient rejects inbound shipment, transitioning state to `Rejected`.
+  - `reclaimRejectedUnit(unitId)`: Current owner reclaims rejected stock.
 - **Dispensing & Sale Detachment**:
   - `sellQuantity(unitId, quantity)`: Splits stock and marks partial dispensing on-chain with updated metadata.
   - `markAsSold(unitId)`: Finalizes complete unit sale, permanently locking it against subsequent transfers.
 
 ---
 
-## 🧪 Testing Suite (21 Test Cases)
+## 🧪 Testing Suite (25 Test Cases)
 
 Run the Chai/Hardhat test suite:
 
@@ -43,44 +44,27 @@ Run the Chai/Hardhat test suite:
 npm test
 ```
 
-All 21 comprehensive test scenarios validate:
+All 25 comprehensive test scenarios validate:
 1. **Admin & Role Authorization**: Role assignment, admin initialization, and unauthorized access reverts.
-2. **Hierarchical Creation**: Root unit creation, parent/root lineage tracking, and permission checks.
+2. **Hierarchical Creation**: Root unit creation, parent/root lineage tracking, batch packing limits, and hierarchy level enforcement.
 3. **Partial Transfers**: Sender remainder retention and child unit detachment.
-4. **Two-Party Handshake**: Mutual acceptance, unauthorized recipient prevention, and wrong-caller reverts.
-5. **Transfer Rejection**: Recipient rejection capability, state transition to `Status.Rejected (3)`, and custody retention.
-6. **Dispensing & Sale**: `sellQuantity` partial splitting, `markAsSold` complete sales, zero-quantity checks, and over-quantity reverts.
+4. **Two-Party Handshake**: Mutual acceptance, unauthorized recipient prevention, wrong-caller reverts, transfer cancellation, and rejection handling.
+5. **Final Sale & Detachment**: Complete and partial sales (`sellQuantity`), quantity conservation, and transfer prevention on sold stock.
 
 ---
 
-## 🚀 Deployment & Management Scripts
+## 🚀 Deployment & Scripts
 
 ```bash
 # Compile contracts
-npm run compile
+npx hardhat compile
+
+# Run tests
+npx hardhat test
 
 # Deploy to Sepolia testnet
-npm run deploy:sepolia
+npx hardhat run scripts/deploy-sepolia.ts --network sepolia
 
-# Deploy a fresh manufacturer contract and sync environment files
-npm run deploy:fresh-manufacturer
-
-# Run end-to-end Sepolia validation flow
-npm run verify:sepolia
-
-# Grant roles to distributor / handler accounts
-npx hardhat run scripts/grant-roles.ts --network sepolia
-```
-
----
-
-## ⚙️ Environment Configuration (`backend/.env`)
-
-```env
-SEPOLIA_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
-SEPOLIA_PRIVATE_KEY_MANUFACTURER=0x...
-SEPOLIA_PRIVATE_KEY_DISTRIBUTOR=0x...
-SEPOLIA_CHAIN_ID=11155111
-ETHERSCAN_API_KEY=YOUR_ETHERSCAN_KEY
-SEPOLIA_CONTRACT_ADDRESS=0x2bAE15834463a657F68673135B8deCd39EF33044
+# Run E2E Sepolia invariant verification suite
+npx hardhat run scripts/e2e-sepolia-validation.ts --network sepolia
 ```
