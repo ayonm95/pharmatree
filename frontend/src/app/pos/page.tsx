@@ -7,7 +7,6 @@ import {
   PHARMA_TREE_ABI,
   PHARMA_TREE_CONTRACT,
 } from "@/lib/pharmaTree";
-import { readonlyProvider } from "@/lib/rpc";
 import {
   playBeepSuccess,
   playSirenAlarm,
@@ -16,13 +15,15 @@ import {
   triggerHaptic,
 } from "@/lib/audio-alerts";
 import { useHardwareBarcodeScanner } from "@/hooks/useHardwareBarcodeScanner";
+import { useChainData } from "@/hooks/useChainData";
+import { Sidebar } from "@/components/wallet/Sidebar";
+import { MobileNavDrawer } from "@/components/wallet/MobileNavDrawer";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
 import { StatusBadge } from "@/components/ui/StatusBadge";
 import { CopyableHash } from "@/components/ui/CopyableHash";
-import { formatAddress, formatDate } from "@/lib/format";
+import { formatAddress } from "@/lib/format";
 import {
-  QrCode,
   Scan,
   ShieldAlert,
   ShieldCheck,
@@ -30,8 +31,6 @@ import {
   CheckCircle2,
   XCircle,
   Pill,
-  Box,
-  Truck,
   RotateCcw,
   Zap,
   Volume2,
@@ -40,16 +39,12 @@ import {
   CameraOff,
   Keyboard,
   ExternalLink,
-  Lock,
-  ArrowRight,
   History,
-  FileWarning,
-  Sparkles,
-  MapPin,
-  Clock,
-  ChevronRight,
-  Layers,
+  Menu,
+  Wallet,
+  Plus,
   AlertOctagon,
+  FileWarning,
 } from "lucide-react";
 
 type VerificationResult = {
@@ -97,7 +92,12 @@ type ScanActivityItem = {
   txHash?: string;
 };
 
-export default function VendorPosTerminal() {
+export default function VendorPosPage() {
+  const { account, connected, role, isAdmin, loading: chainLoading, connectWallet } = useChainData();
+
+  // Navigation drawer for mobile
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
+
   // Sound toggle
   const [soundEnabled, setSoundEnabled] = useState(true);
 
@@ -122,13 +122,6 @@ export default function VendorPosTerminal() {
   } | null>(null);
   const [incidentLoggedId, setIncidentLoggedId] = useState<string | null>(null);
 
-  // Terminal active vendor identity (Defaults to relayer or manufacturer address)
-  const [activeVendorAddress, setActiveVendorAddress] = useState<string>(
-    "0x65371f0ddFa0AD6e7655243cD2A2567328EA1537"
-  );
-  const [clientWalletConnected, setClientWalletConnected] = useState(false);
-  const [clientWalletAddress, setClientWalletAddress] = useState<string | null>(null);
-
   // Recent scan history during this shift
   const [scanHistory, setScanHistory] = useState<ScanActivityItem[]>([]);
 
@@ -136,33 +129,15 @@ export default function VendorPosTerminal() {
   const lastScannedTimeRef = useRef<number>(0);
   const html5QrCodeRef = useRef<any>(null);
 
-  // Check client wallet if available
-  useEffect(() => {
-    async function detectWallet() {
-      if (typeof window !== "undefined" && (window as any).ethereum) {
-        try {
-          const provider = new ethers.BrowserProvider((window as any).ethereum);
-          const accounts = await provider.listAccounts();
-          if (accounts.length > 0) {
-            setClientWalletConnected(true);
-            setClientWalletAddress(accounts[0].address);
-          }
-        } catch {
-          // Ignore
-        }
-      }
-    }
-    detectWallet();
-  }, []);
+  const activeVendorAddress = account || "0x65371f0ddFa0AD6e7655243cD2A2567328EA1537";
 
-  // Process a scanned code (either from camera or hardware barcode gun)
+  // Process a scanned code
   const processScannedCode = useCallback(
     async (rawCode: string) => {
       const now = Date.now();
-      if (now - lastScannedTimeRef.current < 1500) return; // 1.5s throttle
+      if (now - lastScannedTimeRef.current < 1500) return;
       lastScannedTimeRef.current = now;
 
-      // Extract number from rawCode (handles "PHARMATREE-1", "https://.../verify?unitId=1", or raw "1")
       let cleanId = rawCode.trim();
       if (cleanId.includes("unitId=")) {
         const match = cleanId.match(/unitId=(\d+)/);
@@ -203,7 +178,6 @@ export default function VendorPosTerminal() {
           if (soundEnabled) playBeepSuccess();
           triggerHaptic(60);
 
-          // Default dispense qty to full pack or 1
           const maxQ = data.unit?.quantity ? Number(data.unit.quantity) : 1;
           setDispenseQty(maxQ);
 
@@ -219,7 +193,6 @@ export default function VendorPosTerminal() {
             ...prev.slice(0, 19),
           ]);
         } else {
-          // Counterfeit, Replay, Diversion, or Contamination!
           if (soundEnabled) playSirenAlarm();
           triggerHaptic([200, 100, 200, 100, 300]);
 
@@ -286,15 +259,13 @@ export default function VendorPosTerminal() {
           { facingMode: "environment" },
           {
             fps: 15,
-            qrbox: { width: 250, height: 250 },
+            qrbox: { width: 240, height: 240 },
             aspectRatio: 1.0,
           },
           (decodedText) => {
             processScannedCode(decodedText);
           },
-          () => {
-            // Frame scan without QR (ignore)
-          }
+          () => {}
         );
       } catch (err: any) {
         console.error("Camera startup error:", err);
@@ -315,14 +286,12 @@ export default function VendorPosTerminal() {
         try {
           html5QrCodeRef.current.stop().catch(() => {});
           html5QrCodeRef.current.clear();
-        } catch {
-          // Ignore
-        }
+        } catch {}
       }
     };
   }, [cameraActive, processScannedCode]);
 
-  // Execute on-chain dispensing (Mark as Sold or Partial Fractional Sale)
+  // Execute dispensing
   async function handleDispense() {
     if (!currentVerification?.unit) return;
     const unitId = currentVerification.unit.id;
@@ -352,7 +321,6 @@ export default function VendorPosTerminal() {
           remainingQty: data.remainingQuantity,
         });
 
-        // Update current verification unit quantity
         setCurrentVerification((prev) => {
           if (!prev?.unit) return prev;
           return {
@@ -383,7 +351,6 @@ export default function VendorPosTerminal() {
           ...prev,
         ]);
       } else if (data.requiresClientSigning && (window as any).ethereum) {
-        // Fallback: Trigger client-side wallet signing directly
         const provider = new ethers.BrowserProvider((window as any).ethereum);
         const signer = await provider.getSigner();
         const contract = new ethers.Contract(PHARMA_TREE_CONTRACT, PHARMA_TREE_ABI, signer);
@@ -416,7 +383,7 @@ export default function VendorPosTerminal() {
     }
   }
 
-  // Handle immediate quarantine & incident report
+  // Handle quarantine & incident report
   async function handleQuarantineIncident() {
     if (!scannedUnitId) return;
     setIsLoggingIncident(true);
@@ -500,1213 +467,929 @@ export default function VendorPosTerminal() {
       currentVerification.diversionDetected ||
       currentVerification.tiers?.tier4_integrity === false);
 
+  const canCreate = Boolean(account) && (role.manufacturer || isAdmin);
+
   return (
-    <div style={{ minHeight: "100vh", backgroundColor: "#0b0f19", color: "#f1f5f9", fontFamily: "var(--font-sans)" }}>
-      {/* Top POS Header */}
+    <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", backgroundColor: "var(--color-bg-page)" }}>
+      {/* Unified App Header */}
       <header
         style={{
-          borderBottom: "1px solid #1e293b",
-          backgroundColor: "#0f172a",
-          padding: "14px 24px",
+          height: "64px",
+          borderBottom: "1px solid var(--color-border-default)",
+          backgroundColor: "var(--color-bg-surface)",
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
-          flexWrap: "wrap",
-          gap: "12px",
+          padding: "0 var(--space-4)",
+          position: "sticky",
+          top: 0,
+          zIndex: "var(--z-sticky)",
         }}
       >
-        <div style={{ display: "flex", alignItems: "center", gap: "16px" }}>
-          <div
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
+          <button
+            type="button"
+            className="mobile-nav-toggle"
+            onClick={() => setMobileNavOpen(true)}
+            aria-label="Open menu"
             style={{
-              width: "40px",
-              height: "40px",
-              borderRadius: "10px",
-              backgroundColor: "rgba(16, 185, 129, 0.15)",
-              border: "1px solid rgba(16, 185, 129, 0.3)",
+              minWidth: "44px",
+              minHeight: "44px",
               display: "flex",
               alignItems: "center",
               justifyContent: "center",
-              color: "#10b981",
+              background: "none",
+              border: "1px solid var(--color-border-default)",
+              borderRadius: "var(--radius-control)",
+              cursor: "pointer",
+              color: "var(--color-text-main)",
             }}
           >
-            <Scan size={22} />
-          </div>
-          <div>
-            <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-              <h1 style={{ margin: 0, fontSize: "1.15rem", fontWeight: 700, color: "#fff", letterSpacing: "-0.01em" }}>
-                PharmaTree POS Terminal
-              </h1>
-              <span
-                style={{
-                  backgroundColor: "#1e293b",
-                  color: "#94a3b8",
-                  fontSize: "0.7rem",
-                  padding: "2px 8px",
-                  borderRadius: "999px",
-                  fontWeight: 600,
-                  textTransform: "uppercase",
-                  letterSpacing: "0.05em",
-                }}
-              >
-                Kiosk Mode
-              </span>
+            <Menu size={20} />
+          </button>
+          <Link href="/" style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", textDecoration: "none" }}>
+            <div
+              style={{
+                width: "32px",
+                height: "32px",
+                borderRadius: "var(--radius-control)",
+                backgroundColor: "var(--color-primary)",
+                color: "#fff",
+                display: "flex",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+              aria-hidden="true"
+            >
+              <Plus size={18} strokeWidth={3} />
             </div>
-            <p style={{ margin: 0, fontSize: "0.8rem", color: "#64748b" }}>
-              Point-of-Sale Dispensing &amp; 4-Tier Anti-Counterfeit Interception
-            </p>
-          </div>
+            <span style={{ fontSize: "var(--text-base)", fontWeight: 800, letterSpacing: "-0.02em", color: "var(--color-text-main)" }}>
+              PHARMATREE
+            </span>
+          </Link>
+          <span
+            style={{
+              backgroundColor: "var(--color-primary-subtle)",
+              color: "var(--color-primary)",
+              border: "1px solid var(--color-primary-border)",
+              fontSize: "var(--text-xs)",
+              padding: "2px 8px",
+              borderRadius: "var(--radius-pill)",
+              fontWeight: 700,
+              textTransform: "uppercase",
+              letterSpacing: "0.05em",
+            }}
+          >
+            POS Scanner
+          </span>
         </div>
 
-        {/* Status Indicators & Controls */}
-        <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
-          {/* Relayer Gas Sponsor Badge */}
-          <div
-            style={{
-              display: "flex",
-              alignItems: "center",
-              gap: "6px",
-              backgroundColor: "rgba(59, 130, 246, 0.1)",
-              border: "1px solid rgba(59, 130, 246, 0.25)",
-              padding: "6px 12px",
-              borderRadius: "8px",
-              fontSize: "0.78rem",
-            }}
-          >
-            <Zap size={14} color="#60a5fa" />
-            <span style={{ color: "#93c5fd" }}>Gasless Sponsor:</span>
-            <span style={{ color: "#34d399", fontWeight: 600 }}>Active (Sepolia)</span>
-          </div>
-
-          {/* Sound Toggle */}
-          <button
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
+          {/* Audio toggle button */}
+          <Button
+            variant="outline"
+            size="sm"
             onClick={() => {
               playClickSound();
               setSoundEnabled(!soundEnabled);
             }}
-            style={{
-              background: "#1e293b",
-              border: "1px solid #334155",
-              color: soundEnabled ? "#38bdf8" : "#64748b",
-              borderRadius: "8px",
-              padding: "7px 12px",
-              cursor: "pointer",
-              display: "flex",
-              alignItems: "center",
-              gap: "6px",
-              fontSize: "0.78rem",
-              fontWeight: 500,
-            }}
-            title={soundEnabled ? "Mute Scanner Audio" : "Unmute Scanner Audio"}
+            icon={soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
+            aria-label={soundEnabled ? "Mute audio alerts" : "Unmute audio alerts"}
           >
-            {soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
-            <span>{soundEnabled ? "Audio ON" : "Muted"}</span>
-          </button>
+            {soundEnabled ? "Audio ON" : "Muted"}
+          </Button>
 
-          {/* Link back */}
-          <Link
-            href="/inventory"
-            style={{
-              textDecoration: "none",
-              color: "#94a3b8",
-              fontSize: "0.8rem",
-              padding: "7px 12px",
-              borderRadius: "8px",
-              border: "1px solid #334155",
-              backgroundColor: "#1e293b",
-            }}
+          {/* Connect wallet button */}
+          <Button
+            variant={connected ? "outline" : "primary"}
+            size="sm"
+            onClick={() => void connectWallet()}
+            loading={chainLoading}
+            icon={<Wallet size={16} />}
           >
-            Back to Inventory
-          </Link>
+            {connected ? formatAddress(account) : "Connect Wallet"}
+          </Button>
         </div>
       </header>
 
-      {/* Main Grid: Left Scanner & Controls | Right Inspection Card & History */}
-      <main
-        style={{
-          maxWidth: "1400px",
-          margin: "0 auto",
-          padding: "24px",
-          display: "grid",
-          gridTemplateColumns: "minmax(320px, 460px) 1fr",
-          gap: "24px",
-          alignItems: "start",
-        }}
-      >
-        {/* ================= LEFT COLUMN: SCANNER INPUTS ================= */}
-        <section style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
-          {/* Hardware Barcode Scanner Banner */}
-          <div
+      {/* Main Body with Unified Sidebar & POS Content */}
+      <div style={{ display: "flex", flex: 1 }}>
+        <Sidebar activeMode="pos" canCreateUnit={canCreate} />
+        <MobileNavDrawer
+          isOpen={mobileNavOpen}
+          onClose={() => setMobileNavOpen(false)}
+          activeMode="pos"
+          canCreateUnit={canCreate}
+        />
+
+        <main
+          id="main-content"
+          style={{
+            flex: 1,
+            padding: "var(--space-6) var(--space-4)",
+            maxWidth: "1280px",
+            margin: "0 auto",
+            width: "100%",
+            display: "flex",
+            flexDirection: "column",
+            gap: "var(--space-6)",
+          }}
+        >
+          {/* Top Status Indicators (Card row) */}
+          <section
             style={{
-              backgroundColor: "rgba(30, 41, 59, 0.7)",
-              border: "1px dashed #334155",
-              borderRadius: "12px",
-              padding: "14px 18px",
-              display: "flex",
-              alignItems: "center",
-              gap: "12px",
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+              gap: "var(--space-4)",
             }}
           >
-            <div
-              style={{
-                width: "36px",
-                height: "36px",
-                borderRadius: "8px",
-                backgroundColor: "rgba(96, 165, 250, 0.15)",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                color: "#60a5fa",
-              }}
-            >
-              <Keyboard size={20} />
-            </div>
-            <div style={{ flex: 1 }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                <span style={{ fontSize: "0.85rem", fontWeight: 600, color: "#e2e8f0" }}>
-                  Hardware Barcode Gun Listener
-                </span>
-                <span
+            <Card padding="sm" style={{ display: "flex", flexDirection: "column", gap: "var(--space-1)" }}>
+              <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", fontWeight: 600, textTransform: "uppercase" }}>
+                Terminal Mode
+              </span>
+              <strong style={{ fontSize: "var(--text-sm)", color: "var(--color-text-main)", display: "flex", alignItems: "center", gap: "6px" }}>
+                <Scan size={16} color="var(--color-primary)" /> Retail Dispensary POS
+              </strong>
+            </Card>
+
+            <Card padding="sm" style={{ display: "flex", flexDirection: "column", gap: "var(--space-1)" }}>
+              <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", fontWeight: 600, textTransform: "uppercase" }}>
+                Gasless Sponsor
+              </span>
+              <strong style={{ fontSize: "var(--text-sm)", color: "var(--color-success)", display: "flex", alignItems: "center", gap: "6px" }}>
+                <Zap size={16} /> Active (Sepolia Relayer)
+              </strong>
+            </Card>
+
+            <Card padding="sm" style={{ display: "flex", flexDirection: "column", gap: "var(--space-1)" }}>
+              <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", fontWeight: 600, textTransform: "uppercase" }}>
+                Active Dispensary ID
+              </span>
+              <strong style={{ fontSize: "var(--text-sm)", color: "var(--color-text-main)" }}>
+                <CopyableHash hash={activeVendorAddress} />
+              </strong>
+            </Card>
+
+            <Card padding="sm" style={{ display: "flex", flexDirection: "column", gap: "var(--space-1)" }}>
+              <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", fontWeight: 600, textTransform: "uppercase" }}>
+                Hardware Scanner Wedge
+              </span>
+              <strong style={{ fontSize: "var(--text-sm)", color: "var(--color-success)", display: "flex", alignItems: "center", gap: "6px" }}>
+                <Keyboard size={16} /> USB/BT Gun Ready
+              </strong>
+            </Card>
+          </section>
+
+          {/* Main POS Layout Grid: Left Scanner & Quick Tests | Right Verification & Actions */}
+          <div
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(auto-fit, minmax(360px, 1fr))",
+              gap: "var(--space-6)",
+              alignItems: "start",
+            }}
+          >
+            {/* ================= LEFT COLUMN ================= */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-6)" }}>
+              {/* Camera Scanner Card */}
+              <Card padding="none" style={{ overflow: "hidden" }}>
+                <div
                   style={{
-                    display: "inline-block",
-                    width: "8px",
-                    height: "8px",
-                    borderRadius: "50%",
-                    backgroundColor: "#10b981",
+                    padding: "var(--space-4) var(--space-6)",
+                    borderBottom: "1px solid var(--color-border-default)",
+                    display: "flex",
+                    alignItems: "center",
+                    justifyContent: "space-between",
                   }}
-                />
-              </div>
-              <p style={{ margin: 0, fontSize: "0.75rem", color: "#94a3b8" }}>
-                USB or Bluetooth 2D scanner ready. Pull trigger anywhere to scan.
-              </p>
-            </div>
-          </div>
+                >
+                  <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+                    <Camera size={18} color="var(--color-primary)" />
+                    <span style={{ fontSize: "var(--text-sm)", fontWeight: 700, color: "var(--color-text-main)" }}>
+                      Camera QR Viewfinder
+                    </span>
+                  </div>
+                  <Button
+                    variant={cameraActive ? "danger" : "primary"}
+                    size="sm"
+                    onClick={() => {
+                      playClickSound();
+                      setCameraActive(!cameraActive);
+                    }}
+                    icon={cameraActive ? <CameraOff size={14} /> : <Camera size={14} />}
+                  >
+                    {cameraActive ? "Stop Camera" : "Start Camera"}
+                  </Button>
+                </div>
 
-          {/* Camera Viewfinder Card */}
-          <div
-            style={{
-              backgroundColor: "#0f172a",
-              border: "1px solid #1e293b",
-              borderRadius: "16px",
-              overflow: "hidden",
-              boxShadow: "0 10px 25px -5px rgba(0, 0, 0, 0.5)",
-            }}
-          >
-            <div
-              style={{
-                padding: "14px 18px",
-                borderBottom: "1px solid #1e293b",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "space-between",
-              }}
-            >
-              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                <Camera size={18} color="#38bdf8" />
-                <span style={{ fontSize: "0.9rem", fontWeight: 600, color: "#e2e8f0" }}>
-                  Continuous Camera Scanner
-                </span>
-              </div>
-              <button
-                onClick={() => {
-                  playClickSound();
-                  setCameraActive(!cameraActive);
-                }}
-                style={{
-                  backgroundColor: cameraActive ? "#ef4444" : "#10b981",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: "8px",
-                  padding: "6px 14px",
-                  fontSize: "0.78rem",
-                  fontWeight: 600,
-                  cursor: "pointer",
-                  display: "flex",
-                  alignItems: "center",
-                  gap: "6px",
-                  transition: "background-color 0.2s",
-                }}
-              >
-                {cameraActive ? <CameraOff size={14} /> : <Camera size={14} />}
-                {cameraActive ? "Stop Camera" : "Start Camera"}
-              </button>
-            </div>
-
-            {/* Video Viewport */}
-            <div
-              style={{
-                position: "relative",
-                minHeight: "300px",
-                backgroundColor: "#020617",
-                display: "flex",
-                flexDirection: "column",
-                alignItems: "center",
-                justifyContent: "center",
-                overflow: "hidden",
-              }}
-            >
-              {cameraActive ? (
-                <>
-                  <div id="pos-camera-viewfinder" style={{ width: "100%", height: "100%", maxHeight: "360px" }} />
-                  {cameraLoading && (
-                    <div style={{ position: "absolute", color: "#94a3b8", fontSize: "0.85rem" }}>
-                      Opening camera video stream...
+                {/* Viewport */}
+                <div
+                  style={{
+                    minHeight: "260px",
+                    backgroundColor: "var(--color-bg-muted)",
+                    display: "flex",
+                    flexDirection: "column",
+                    alignItems: "center",
+                    justifyContent: "center",
+                    position: "relative",
+                  }}
+                >
+                  {cameraActive ? (
+                    <>
+                      <div id="pos-camera-viewfinder" style={{ width: "100%", height: "100%", minHeight: "260px" }} />
+                      {cameraLoading && (
+                        <div style={{ position: "absolute", color: "var(--color-text-muted)", fontSize: "var(--text-sm)" }}>
+                          Initializing optical camera stream...
+                        </div>
+                      )}
+                    </>
+                  ) : (
+                    <div style={{ textAlign: "center", padding: "var(--space-8)" }}>
+                      <div
+                        style={{
+                          width: "56px",
+                          height: "56px",
+                          borderRadius: "var(--radius-pill)",
+                          backgroundColor: "var(--color-bg-surface)",
+                          border: "1px solid var(--color-border-default)",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "center",
+                          margin: "0 auto var(--space-3)",
+                          color: "var(--color-text-muted)",
+                        }}
+                      >
+                        <Scan size={26} />
+                      </div>
+                      <h4 style={{ margin: "0 0 var(--space-1)", fontSize: "var(--text-sm)", fontWeight: 600, color: "var(--color-text-main)" }}>
+                        Camera Scanner Idle
+                      </h4>
+                      <p style={{ margin: "0 0 var(--space-4)", fontSize: "var(--text-xs)", color: "var(--color-text-muted)", maxWidth: "240px" }}>
+                        Click &quot;Start Camera&quot; to scan QR codes on medicine packaging.
+                      </p>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          playClickSound();
+                          setCameraActive(true);
+                        }}
+                      >
+                        Activate Camera
+                      </Button>
                     </div>
                   )}
-                </>
+
+                  {cameraError && (
+                    <div
+                      style={{
+                        position: "absolute",
+                        bottom: "var(--space-2)",
+                        left: "var(--space-2)",
+                        right: "var(--space-2)",
+                        backgroundColor: "var(--color-danger-bg)",
+                        color: "var(--color-danger-fg)",
+                        border: "1px solid var(--color-danger-border)",
+                        padding: "var(--space-2) var(--space-3)",
+                        borderRadius: "var(--radius-control)",
+                        fontSize: "var(--text-xs)",
+                      }}
+                    >
+                      {cameraError}
+                    </div>
+                  )}
+                </div>
+              </Card>
+
+              {/* Manual Input & Simulation Presets */}
+              <Card padding="md">
+                <h4 style={{ margin: "0 0 var(--space-2)", fontSize: "var(--text-sm)", fontWeight: 700, color: "var(--color-text-main)" }}>
+                  Manual Unit ID / Barcode Entry
+                </h4>
+                <form
+                  onSubmit={(e) => {
+                    e.preventDefault();
+                    if (manualInput.trim()) {
+                      playClickSound();
+                      processScannedCode(manualInput.trim());
+                    }
+                  }}
+                  style={{ display: "flex", gap: "var(--space-2)" }}
+                >
+                  <input
+                    type="text"
+                    placeholder="Enter numerical unit ID (e.g. 1, 2, 8)"
+                    value={manualInput}
+                    onChange={(e) => setManualInput(e.target.value)}
+                    style={{
+                      flex: 1,
+                      backgroundColor: "var(--color-bg-surface)",
+                      border: "1px solid var(--color-border-default)",
+                      borderRadius: "var(--radius-control)",
+                      padding: "8px 12px",
+                      fontSize: "var(--text-sm)",
+                      color: "var(--color-text-main)",
+                      outline: "none",
+                    }}
+                  />
+                  <Button
+                    type="submit"
+                    variant="primary"
+                    size="sm"
+                    loading={isVerifying}
+                    disabled={!manualInput.trim() || isVerifying}
+                  >
+                    Inspect
+                  </Button>
+                </form>
+
+                {/* Sepolia Scenarios */}
+                <div style={{ marginTop: "var(--space-4)", paddingTop: "var(--space-3)", borderTop: "1px solid var(--color-border-default)" }}>
+                  <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", textTransform: "uppercase", fontWeight: 700, letterSpacing: "0.05em" }}>
+                    Sepolia Contract Audit Scenarios:
+                  </span>
+                  <div style={{ display: "flex", flexWrap: "wrap", gap: "var(--space-2)", marginTop: "var(--space-2)" }}>
+                    <button
+                      type="button"
+                      onClick={() => processScannedCode("1")}
+                      style={{
+                        backgroundColor: "var(--color-success-bg)",
+                        color: "var(--color-success-fg)",
+                        border: "1px solid var(--color-success-border)",
+                        borderRadius: "var(--radius-control)",
+                        padding: "6px 10px",
+                        fontSize: "var(--text-xs)",
+                        fontWeight: 600,
+                        cursor: "pointer",
+                      }}
+                    >
+                      ✓ Unit #1 (Authentic Active)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => processScannedCode("2")}
+                      style={{
+                        backgroundColor: "var(--color-danger-bg)",
+                        color: "var(--color-danger-fg)",
+                        border: "1px solid var(--color-danger-border)",
+                        borderRadius: "var(--radius-control)",
+                        padding: "6px 10px",
+                        fontSize: "var(--text-xs)",
+                        fontWeight: 600,
+                        cursor: "pointer",
+                      }}
+                    >
+                      ⚠ Unit #2 (Replay / Sold)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => processScannedCode("8")}
+                      style={{
+                        backgroundColor: "var(--color-warning-bg)",
+                        color: "var(--color-warning-fg)",
+                        border: "1px solid var(--color-warning-border)",
+                        borderRadius: "var(--radius-control)",
+                        padding: "6px 10px",
+                        fontSize: "var(--text-xs)",
+                        fontWeight: 600,
+                        cursor: "pointer",
+                      }}
+                    >
+                      ⚠ Unit #8 (Diverted Stock)
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => processScannedCode("9999")}
+                      style={{
+                        backgroundColor: "var(--color-danger-bg)",
+                        color: "var(--color-danger-fg)",
+                        border: "1px solid var(--color-danger-border)",
+                        borderRadius: "var(--radius-control)",
+                        padding: "6px 10px",
+                        fontSize: "var(--text-xs)",
+                        fontWeight: 600,
+                        cursor: "pointer",
+                      }}
+                    >
+                      ✕ Unit #9999 (Unregistered)
+                    </button>
+                  </div>
+                </div>
+              </Card>
+            </div>
+
+            {/* ================= RIGHT COLUMN: PRODUCT INSPECTION & AUDIT ================= */}
+            <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-6)" }}>
+              {isVerifying ? (
+                <Card padding="lg" style={{ textAlign: "center" }}>
+                  <div
+                    style={{
+                      width: "40px",
+                      height: "40px",
+                      borderRadius: "var(--radius-pill)",
+                      border: "3px solid var(--color-primary)",
+                      borderTopColor: "transparent",
+                      animation: "spin 0.8s linear infinite",
+                      margin: "0 auto var(--space-4)",
+                    }}
+                  />
+                  <style>{`@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }`}</style>
+                  <h3 style={{ margin: "0 0 var(--space-1)", fontSize: "var(--text-base)", fontWeight: 700, color: "var(--color-text-main)" }}>
+                    Auditing On-Chain Provenance...
+                  </h3>
+                  <p style={{ margin: 0, fontSize: "var(--text-sm)", color: "var(--color-text-muted)" }}>
+                    Querying multi-provider Sepolia RPC failover circuit breaker &amp; scan frequency registry.
+                  </p>
+                </Card>
+              ) : currentVerification ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
+                  {/* CRITICAL COUNTERFEIT EMERGENCY ALERT */}
+                  {isCounterfeitOrBad && (
+                    <div
+                      style={{
+                        backgroundColor: "var(--color-danger-bg)",
+                        border: "2px solid var(--color-danger)",
+                        borderRadius: "var(--radius-surface)",
+                        padding: "var(--space-6)",
+                        boxShadow: "var(--shadow-md)",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: "var(--space-4)" }}>
+                        <div
+                          style={{
+                            width: "44px",
+                            height: "44px",
+                            borderRadius: "var(--radius-control)",
+                            backgroundColor: "var(--color-danger)",
+                            color: "#fff",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            flexShrink: 0,
+                          }}
+                        >
+                          <AlertOctagon size={26} />
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap" }}>
+                            <span
+                              style={{
+                                backgroundColor: "var(--color-danger)",
+                                color: "#fff",
+                                fontSize: "var(--text-xs)",
+                                fontWeight: 800,
+                                padding: "2px 8px",
+                                borderRadius: "var(--radius-pill)",
+                                textTransform: "uppercase",
+                                letterSpacing: "0.05em",
+                              }}
+                            >
+                              CRITICAL: DO NOT DISPENSE
+                            </span>
+                            <span style={{ fontSize: "var(--text-xs)", color: "var(--color-danger)", fontWeight: 700 }}>
+                              Tier {currentVerification.tierFailed || (currentVerification.diversionDetected ? 3 : 2)} Violation
+                            </span>
+                          </div>
+                          <h3 style={{ margin: "var(--space-2) 0 var(--space-1)", fontSize: "var(--text-lg)", fontWeight: 700, color: "var(--color-danger-hover)" }}>
+                            {currentVerification.reason || "Counterfeit or Compromised Stock Detected"}
+                          </h3>
+                          <p style={{ margin: "0 0 var(--space-4)", fontSize: "var(--text-sm)", color: "var(--color-danger-fg)", lineHeight: 1.5 }}>
+                            {currentVerification.message}
+                          </p>
+
+                          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", flexWrap: "wrap" }}>
+                            <Button
+                              variant="danger"
+                              size="sm"
+                              disabled={isLoggingIncident || Boolean(incidentLoggedId)}
+                              onClick={handleQuarantineIncident}
+                              icon={<ShieldAlert size={16} />}
+                            >
+                              {incidentLoggedId
+                                ? `Quarantine Logged (${incidentLoggedId})`
+                                : isLoggingIncident
+                                ? "Logging Incident..."
+                                : "Lock & Quarantine Stock"}
+                            </Button>
+                            {incidentLoggedId && (
+                              <span style={{ fontSize: "var(--text-xs)", color: "var(--color-success)", fontWeight: 600 }}>
+                                Incident recorded on regulatory audit trail.
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Product Details & Audit Card */}
+                  <Card padding="none" style={{ overflow: "hidden" }}>
+                    {/* Header */}
+                    <div
+                      style={{
+                        padding: "var(--space-4) var(--space-6)",
+                        borderBottom: "1px solid var(--color-border-default)",
+                        backgroundColor: isCounterfeitOrBad ? "var(--color-danger-bg)" : "var(--color-success-bg)",
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        flexWrap: "wrap",
+                        gap: "var(--space-2)",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
+                        {isCounterfeitOrBad ? (
+                          <XCircle size={22} color="var(--color-danger)" />
+                        ) : (
+                          <CheckCircle2 size={22} color="var(--color-success)" />
+                        )}
+                        <div>
+                          <h3 style={{ margin: 0, fontSize: "var(--text-base)", fontWeight: 700, color: "var(--color-text-main)" }}>
+                            Unit #{currentVerification.unit?.id || scannedUnitId}
+                          </h3>
+                          <span style={{ fontSize: "var(--text-xs)", color: isCounterfeitOrBad ? "var(--color-danger-fg)" : "var(--color-success-fg)", fontWeight: 600 }}>
+                            {isCounterfeitOrBad ? "Integrity Audit Failed" : "Authentic & Verified on Sepolia"}
+                          </span>
+                        </div>
+                      </div>
+
+                      {currentVerification.unit && (
+                        <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+                          <span
+                            style={{
+                              backgroundColor: "var(--color-bg-surface)",
+                              color: "var(--color-text-muted)",
+                              border: "1px solid var(--color-border-default)",
+                              fontSize: "var(--text-xs)",
+                              padding: "2px 8px",
+                              borderRadius: "var(--radius-control)",
+                              fontWeight: 600,
+                            }}
+                          >
+                            {currentVerification.unit.levelName}
+                          </span>
+                          <StatusBadge status={currentVerification.unit.status} />
+                        </div>
+                      )}
+                    </div>
+
+                    <div style={{ padding: "var(--space-6)" }}>
+                      {/* Medication Info Grid */}
+                      {currentVerification.unit && (
+                        <div style={{ marginBottom: "var(--space-6)" }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", marginBottom: "var(--space-3)" }}>
+                            <Pill size={18} color="var(--color-primary)" />
+                            <h4 style={{ margin: 0, fontSize: "var(--text-base)", fontWeight: 700, color: "var(--color-text-main)" }}>
+                              {currentVerification.unit.metadata}
+                            </h4>
+                          </div>
+
+                          <div
+                            style={{
+                              display: "grid",
+                              gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))",
+                              gap: "var(--space-3)",
+                              backgroundColor: "var(--color-bg-muted)",
+                              padding: "var(--space-4)",
+                              borderRadius: "var(--radius-control)",
+                              border: "1px solid var(--color-border-default)",
+                            }}
+                          >
+                            <div>
+                              <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>Available Stock:</span>
+                              <div style={{ fontSize: "var(--text-lg)", fontWeight: 800, color: "var(--color-success)", marginTop: "2px" }}>
+                                {currentVerification.unit.quantity} units
+                              </div>
+                            </div>
+                            <div>
+                              <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>Manufacturer:</span>
+                              <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-main)", marginTop: "2px" }}>
+                                <CopyableHash hash={currentVerification.unit.manufacturer} />
+                              </div>
+                            </div>
+                            <div>
+                              <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>Current Owner:</span>
+                              <div style={{ fontSize: "var(--text-xs)", color: "var(--color-text-main)", marginTop: "2px" }}>
+                                <CopyableHash hash={currentVerification.unit.currentOwner} />
+                              </div>
+                            </div>
+                            <div>
+                              <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>QR Scan Frequency:</span>
+                              <div style={{ fontSize: "var(--text-xs)", fontWeight: 600, color: currentVerification.scanRecord?.scanCount === 1 ? "var(--color-success)" : "var(--color-warning)", marginTop: "2px" }}>
+                                {currentVerification.scanRecord?.scanCount === 1
+                                  ? "First time scanned (Pristine)"
+                                  : `Scanned ${currentVerification.scanRecord?.scanCount || 0} times`}
+                              </div>
+                            </div>
+                          </div>
+                        </div>
+                      )}
+
+                      {/* 5-Tier Audit Checklist */}
+                      <div style={{ marginBottom: "var(--space-6)" }}>
+                        <h5 style={{ margin: "0 0 var(--space-3)", fontSize: "var(--text-xs)", color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 700 }}>
+                          Anti-Counterfeiting 5-Tier Audit Checklist
+                        </h5>
+                        <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", borderRadius: "var(--radius-control)", backgroundColor: "var(--color-bg-subtle)", border: "1px solid var(--color-border-default)", fontSize: "var(--text-xs)" }}>
+                            <span style={{ color: "var(--color-text-main)" }}>Tier 1: On-Chain Genesis Registration</span>
+                            <span style={{ color: currentVerification.tiers?.tier1_registered ? "var(--color-success)" : "var(--color-danger)", fontWeight: 700 }}>
+                              {currentVerification.tiers?.tier1_registered ? "✓ Valid Unit ID" : "✕ Unregistered ID"}
+                            </span>
+                          </div>
+
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", borderRadius: "var(--radius-control)", backgroundColor: "var(--color-bg-subtle)", border: "1px solid var(--color-border-default)", fontSize: "var(--text-xs)" }}>
+                            <span style={{ color: "var(--color-text-main)" }}>Tier 2: Anti-Replay &amp; Double-Dispensing Lock</span>
+                            <span style={{ color: currentVerification.tiers?.tier2_unsold ? "var(--color-success)" : "var(--color-danger)", fontWeight: 700 }}>
+                              {currentVerification.tiers?.tier2_unsold ? "✓ Unsold & Active" : "✕ Already Sold (Replay Attack)"}
+                            </span>
+                          </div>
+
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", borderRadius: "var(--radius-control)", backgroundColor: "var(--color-bg-subtle)", border: "1px solid var(--color-border-default)", fontSize: "var(--text-xs)" }}>
+                            <span style={{ color: "var(--color-text-main)" }}>Tier 3: Handshake Custody &amp; Anti-Diversion</span>
+                            <span style={{ color: !currentVerification.diversionDetected ? "var(--color-success)" : "var(--color-warning)", fontWeight: 700 }}>
+                              {!currentVerification.diversionDetected ? "✓ Authorized Dispensary Stock" : "⚠ Diverted Stock (Owner Mismatch)"}
+                            </span>
+                          </div>
+
+                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", borderRadius: "var(--radius-control)", backgroundColor: "var(--color-bg-subtle)", border: "1px solid var(--color-border-default)", fontSize: "var(--text-xs)" }}>
+                            <span style={{ color: "var(--color-text-main)" }}>Tier 4: Transit Integrity &amp; Contamination</span>
+                            <span style={{ color: currentVerification.tiers?.tier4_integrity ? "var(--color-success)" : "var(--color-danger)", fontWeight: 700 }}>
+                              {currentVerification.tiers?.tier4_integrity ? "✓ Verified Transit Handshake" : "✕ Rejected / Recalled Stock"}
+                            </span>
+                          </div>
+
+                          {/* Tier 5 Scratch PIN */}
+                          <div style={{ padding: "10px 12px", borderRadius: "var(--radius-control)", backgroundColor: "var(--color-bg-subtle)", border: "1px solid var(--color-border-default)", fontSize: "var(--text-xs)" }}>
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                              <span style={{ color: "var(--color-text-main)" }}>Tier 5: Cryptographic Scratch-Off Seal PIN</span>
+                              <span
+                                style={{
+                                  color:
+                                    currentVerification.tamperSealStatus === "verified"
+                                      ? "var(--color-success)"
+                                      : currentVerification.tamperSealStatus === "invalid"
+                                      ? "var(--color-danger)"
+                                      : "var(--color-text-muted)",
+                                  fontWeight: 700,
+                                }}
+                              >
+                                {currentVerification.tamperSealStatus === "verified"
+                                  ? "✓ Cryptographically Verified"
+                                  : currentVerification.tamperSealStatus === "invalid"
+                                  ? "✕ Invalid Secret PIN"
+                                  : "Optional Verification"}
+                              </span>
+                            </div>
+
+                            {currentVerification.tamperSealStatus !== "verified" && (
+                              <div style={{ display: "flex", gap: "var(--space-2)", marginTop: "var(--space-2)" }}>
+                                <input
+                                  type="text"
+                                  placeholder={`Enter scratch PIN (e.g. ${currentVerification.unit?.manufacturer.slice(-4) || "1537"})`}
+                                  value={scratchSecret}
+                                  onChange={(e) => setScratchSecret(e.target.value)}
+                                  style={{
+                                    flex: 1,
+                                    backgroundColor: "var(--color-bg-surface)",
+                                    border: "1px solid var(--color-border-default)",
+                                    borderRadius: "var(--radius-control)",
+                                    padding: "6px 10px",
+                                    fontSize: "var(--text-xs)",
+                                    color: "var(--color-text-main)",
+                                  }}
+                                />
+                                <Button variant="outline" size="sm" onClick={handleVerifyTamperPin}>
+                                  Verify PIN
+                                </Button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* DISPENSING / SALE SECTION (Active Only) */}
+                      {!isCounterfeitOrBad && currentVerification.unit && (
+                        <div
+                          style={{
+                            backgroundColor: "var(--color-primary-subtle)",
+                            border: "1px solid var(--color-primary-border)",
+                            borderRadius: "var(--radius-surface)",
+                            padding: "var(--space-4)",
+                          }}
+                        >
+                          <h4 style={{ margin: "0 0 var(--space-3)", fontSize: "var(--text-sm)", fontWeight: 700, color: "var(--color-primary)" }}>
+                            Point-of-Sale Dispensing Action
+                          </h4>
+
+                          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-4)", flexWrap: "wrap", marginBottom: "var(--space-4)" }}>
+                            <div>
+                              <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", display: "block", marginBottom: "4px" }}>
+                                Dispense Quantity:
+                              </span>
+                              <div style={{ display: "flex", alignItems: "center", gap: "var(--space-1)" }}>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => {
+                                    playClickSound();
+                                    setDispenseQty((q) => Math.max(1, q - 1));
+                                  }}
+                                >
+                                  -
+                                </Button>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  max={Number(currentVerification.unit.quantity)}
+                                  value={dispenseQty}
+                                  onChange={(e) =>
+                                    setDispenseQty(
+                                      Math.min(Number(currentVerification.unit?.quantity || 1), Math.max(1, Number(e.target.value)))
+                                    )
+                                  }
+                                  style={{
+                                    width: "56px",
+                                    textAlign: "center",
+                                    backgroundColor: "var(--color-bg-surface)",
+                                    border: "1px solid var(--color-border-default)",
+                                    borderRadius: "var(--radius-control)",
+                                    padding: "6px",
+                                    color: "var(--color-text-main)",
+                                    fontWeight: 700,
+                                    fontSize: "var(--text-sm)",
+                                  }}
+                                />
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => {
+                                    playClickSound();
+                                    setDispenseQty((q) =>
+                                      Math.min(Number(currentVerification.unit?.quantity || 1), q + 1)
+                                    );
+                                  }}
+                                >
+                                  +
+                                </Button>
+                              </div>
+                            </div>
+
+                            {/* Presets */}
+                            <div style={{ display: "flex", gap: "var(--space-1)", alignItems: "flex-end" }}>
+                              <Button variant="outline" size="sm" onClick={() => setDispenseQty(1)}>
+                                1 Unit
+                              </Button>
+                              <Button variant="outline" size="sm" onClick={() => setDispenseQty(Math.min(10, Number(currentVerification.unit?.quantity || 1)))}>
+                                10 Units
+                              </Button>
+                              <Button variant="outline" size="sm" onClick={() => setDispenseQty(Number(currentVerification.unit?.quantity || 1))}>
+                                Full Pack ({currentVerification.unit.quantity})
+                              </Button>
+                            </div>
+                          </div>
+
+                          {/* Submit button */}
+                          <Button
+                            variant="primary"
+                            size="md"
+                            loading={isDispensing}
+                            disabled={isDispensing || Number(currentVerification.unit.quantity) === 0}
+                            onClick={handleDispense}
+                            icon={<Zap size={18} />}
+                            style={{ width: "100%" }}
+                          >
+                            {isDispensing
+                              ? "Broadcasting Dispensing Tx to Sepolia..."
+                              : `Confirm & Mark ${dispenseQty} Unit(s) as Sold (Gasless)`}
+                          </Button>
+
+                          {/* Receipt */}
+                          {dispenseResult && (
+                            <div
+                              style={{
+                                marginTop: "var(--space-4)",
+                                backgroundColor: "var(--color-success-bg)",
+                                border: "1px solid var(--color-success-border)",
+                                borderRadius: "var(--radius-control)",
+                                padding: "var(--space-3)",
+                              }}
+                            >
+                              <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", color: "var(--color-success)", fontWeight: 700, fontSize: "var(--text-sm)" }}>
+                                <CheckCircle2 size={16} /> Dispensing Confirmed On-Chain!
+                              </div>
+                              <p style={{ margin: "4px 0 8px", fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
+                                Successfully sold {dispenseResult.dispensedQty} unit(s). Remaining stock on-chain: <strong>{dispenseResult.remainingQty}</strong>.
+                              </p>
+                              <a
+                                href={`https://sepolia.etherscan.io/tx/${dispenseResult.txHash}`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                style={{
+                                  color: "var(--color-primary)",
+                                  fontSize: "var(--text-xs)",
+                                  display: "inline-flex",
+                                  alignItems: "center",
+                                  gap: "4px",
+                                  textDecoration: "none",
+                                  fontWeight: 600,
+                                }}
+                              >
+                                View Sepolia Etherscan Receipt <ExternalLink size={12} />
+                              </a>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </Card>
+                </div>
               ) : (
-                <div style={{ textAlign: "center", padding: "36px 20px" }}>
+                /* Idle Prompt Card */
+                <Card padding="lg" style={{ textAlign: "center" }}>
                   <div
                     style={{
                       width: "60px",
                       height: "60px",
-                      borderRadius: "50%",
-                      backgroundColor: "rgba(30, 41, 59, 0.6)",
+                      borderRadius: "var(--radius-pill)",
+                      backgroundColor: "var(--color-primary-subtle)",
+                      border: "1px solid var(--color-primary-border)",
                       display: "flex",
                       alignItems: "center",
                       justifyContent: "center",
-                      margin: "0 auto 14px",
-                      color: "#64748b",
+                      margin: "0 auto var(--space-4)",
+                      color: "var(--color-primary)",
                     }}
                   >
-                    <QrCode size={30} />
+                    <Scan size={30} />
                   </div>
-                  <p style={{ margin: "0 0 6px", fontSize: "0.9rem", fontWeight: 500, color: "#cbd5e1" }}>
-                    Camera Scanner Standby
+                  <h3 style={{ margin: "0 0 var(--space-2)", fontSize: "var(--text-base)", fontWeight: 700, color: "var(--color-text-main)" }}>
+                    Ready to Scan Medicine Packaging
+                  </h3>
+                  <p style={{ margin: "0 auto var(--space-4)", fontSize: "var(--text-sm)", color: "var(--color-text-muted)", maxWidth: "380px" }}>
+                    Aim your optical barcode gun or camera at any pharmaceutical QR code. The system verifies on-chain registration, checks for duplicate sold stickers, and guarantees zero double-spending.
                   </p>
-                  <p style={{ margin: "0 0 16px", fontSize: "0.78rem", color: "#64748b", maxWidth: "260px" }}>
-                    Click &quot;Start Camera&quot; to scan medicine packaging labels with your device camera.
-                  </p>
-                  <button
-                    onClick={() => {
-                      playClickSound();
-                      setCameraActive(true);
-                    }}
-                    style={{
-                      backgroundColor: "#1e293b",
-                      border: "1px solid #334155",
-                      color: "#38bdf8",
-                      borderRadius: "8px",
-                      padding: "8px 18px",
-                      fontSize: "0.82rem",
-                      fontWeight: 600,
-                      cursor: "pointer",
-                    }}
-                  >
-                    Activate Camera
-                  </button>
-                </div>
+                  <div style={{ display: "inline-flex", alignItems: "center", gap: "var(--space-2)", fontSize: "var(--text-xs)", color: "var(--color-success)", fontWeight: 600 }}>
+                    <CheckCircle2 size={16} /> 5-Tier Anti-Counterfeit Interception Active
+                  </div>
+                </Card>
               )}
 
-              {cameraError && (
-                <div
-                  style={{
-                    position: "absolute",
-                    bottom: "10px",
-                    left: "10px",
-                    right: "10px",
-                    backgroundColor: "rgba(239, 68, 68, 0.9)",
-                    color: "#fff",
-                    padding: "8px 12px",
-                    borderRadius: "8px",
-                    fontSize: "0.75rem",
-                  }}
-                >
-                  {cameraError}
+              {/* Shift Activity Log */}
+              <Card padding="md">
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "var(--space-3)" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+                    <History size={16} color="var(--color-text-muted)" />
+                    <h4 style={{ margin: 0, fontSize: "var(--text-sm)", fontWeight: 700, color: "var(--color-text-main)" }}>
+                      Shift Scan Activity Log
+                    </h4>
+                  </div>
+                  <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
+                    {scanHistory.length} event(s) recorded
+                  </span>
                 </div>
-              )}
+
+                {scanHistory.length === 0 ? (
+                  <p style={{ margin: 0, fontSize: "var(--text-xs)", color: "var(--color-text-muted)", textAlign: "center", padding: "var(--space-4)" }}>
+                    No scans recorded yet in this shift.
+                  </p>
+                ) : (
+                  <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)", maxHeight: "240px", overflowY: "auto" }}>
+                    {scanHistory.map((item) => (
+                      <div
+                        key={item.id}
+                        style={{
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          padding: "8px 12px",
+                          borderRadius: "var(--radius-control)",
+                          backgroundColor: "var(--color-bg-subtle)",
+                          border: "1px solid var(--color-border-default)",
+                          fontSize: "var(--text-xs)",
+                        }}
+                      >
+                        <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+                          {item.type === "VERIFIED" && <CheckCircle2 size={16} color="var(--color-success)" />}
+                          {item.type === "COUNTERFEIT" && <AlertTriangle size={16} color="var(--color-danger)" />}
+                          {item.type === "DISPENSED" && <Zap size={16} color="var(--color-primary)" />}
+                          {item.type === "QUARANTINED" && <ShieldAlert size={16} color="var(--color-danger)" />}
+                          <div>
+                            <div style={{ fontWeight: 600, color: "var(--color-text-main)" }}>{item.title}</div>
+                            <div style={{ fontSize: "11px", color: "var(--color-text-muted)" }}>{item.details}</div>
+                          </div>
+                        </div>
+                        <div style={{ fontSize: "11px", color: "var(--color-text-muted)", flexShrink: 0 }}>
+                          {new Date(item.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </Card>
             </div>
           </div>
-
-          {/* Manual Input & Quick-Test Presets */}
-          <div
-            style={{
-              backgroundColor: "#0f172a",
-              border: "1px solid #1e293b",
-              borderRadius: "16px",
-              padding: "18px",
-            }}
-          >
-            <label style={{ display: "block", fontSize: "0.82rem", fontWeight: 600, color: "#94a3b8", marginBottom: "8px" }}>
-              Manual Unit ID Entry
-            </label>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (manualInput.trim()) {
-                  playClickSound();
-                  processScannedCode(manualInput.trim());
-                }
-              }}
-              style={{ display: "flex", gap: "8px" }}
-            >
-              <input
-                type="text"
-                placeholder="Enter Unit ID (e.g. 1, 2, 8)"
-                value={manualInput}
-                onChange={(e) => setManualInput(e.target.value)}
-                style={{
-                  flex: 1,
-                  backgroundColor: "#020617",
-                  border: "1px solid #334155",
-                  borderRadius: "8px",
-                  padding: "10px 14px",
-                  color: "#f8fafc",
-                  fontSize: "0.9rem",
-                  outline: "none",
-                }}
-              />
-              <button
-                type="submit"
-                disabled={isVerifying || !manualInput.trim()}
-                style={{
-                  backgroundColor: "#2563eb",
-                  color: "#fff",
-                  border: "none",
-                  borderRadius: "8px",
-                  padding: "0 18px",
-                  fontSize: "0.85rem",
-                  fontWeight: 600,
-                  cursor: isVerifying ? "not-allowed" : "pointer",
-                  opacity: isVerifying || !manualInput.trim() ? 0.6 : 1,
-                }}
-              >
-                {isVerifying ? "Auditing..." : "Inspect"}
-              </button>
-            </form>
-
-            {/* Quick Test Barcode Buttons */}
-            <div style={{ marginTop: "16px", paddingTop: "14px", borderTop: "1px solid #1e293b" }}>
-              <span style={{ fontSize: "0.72rem", color: "#64748b", textTransform: "uppercase", fontWeight: 600, letterSpacing: "0.05em" }}>
-                Sepolia Testnet Simulation Scenarios:
-              </span>
-              <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", marginTop: "8px" }}>
-                <button
-                  type="button"
-                  onClick={() => processScannedCode("1")}
-                  style={{
-                    backgroundColor: "rgba(16, 185, 129, 0.1)",
-                    border: "1px solid rgba(16, 185, 129, 0.3)",
-                    color: "#34d399",
-                    padding: "6px 10px",
-                    borderRadius: "6px",
-                    fontSize: "0.74rem",
-                    cursor: "pointer",
-                    fontWeight: 500,
-                  }}
-                >
-                  ✓ Unit #1 (Authentic Active)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => processScannedCode("2")}
-                  style={{
-                    backgroundColor: "rgba(239, 68, 68, 0.1)",
-                    border: "1px solid rgba(239, 68, 68, 0.3)",
-                    color: "#f87171",
-                    padding: "6px 10px",
-                    borderRadius: "6px",
-                    fontSize: "0.74rem",
-                    cursor: "pointer",
-                    fontWeight: 500,
-                  }}
-                >
-                  ⚠ Unit #2 (Replay / Sold)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => processScannedCode("8")}
-                  style={{
-                    backgroundColor: "rgba(245, 158, 11, 0.1)",
-                    border: "1px solid rgba(245, 158, 11, 0.3)",
-                    color: "#fbbf24",
-                    padding: "6px 10px",
-                    borderRadius: "6px",
-                    fontSize: "0.74rem",
-                    cursor: "pointer",
-                    fontWeight: 500,
-                  }}
-                >
-                  ⚠ Unit #8 (Diverted Stock)
-                </button>
-                <button
-                  type="button"
-                  onClick={() => processScannedCode("9999")}
-                  style={{
-                    backgroundColor: "rgba(239, 68, 68, 0.1)",
-                    border: "1px solid rgba(239, 68, 68, 0.3)",
-                    color: "#f87171",
-                    padding: "6px 10px",
-                    borderRadius: "6px",
-                    fontSize: "0.74rem",
-                    cursor: "pointer",
-                    fontWeight: 500,
-                  }}
-                >
-                  ✕ Unit #9999 (Unregistered)
-                </button>
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {/* ================= RIGHT COLUMN: PRODUCT INSPECTION & AUDIT ================= */}
-        <section style={{ display: "flex", flexDirection: "column", gap: "20px" }}>
-          {/* Active Dispensing / Inspection Card */}
-          {isVerifying ? (
-            <div
-              style={{
-                backgroundColor: "#0f172a",
-                border: "1px solid #1e293b",
-                borderRadius: "16px",
-                padding: "48px 24px",
-                textAlign: "center",
-              }}
-            >
-              <div
-                style={{
-                  width: "48px",
-                  height: "48px",
-                  borderRadius: "50%",
-                  border: "3px solid #3b82f6",
-                  borderTopColor: "transparent",
-                  animation: "spin 0.8s linear infinite",
-                  margin: "0 auto 16px",
-                }}
-              />
-              <style>{`@keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }`}</style>
-              <h3 style={{ margin: "0 0 6px", fontSize: "1.1rem", color: "#f8fafc" }}>
-                Auditing On-Chain Provenance...
-              </h3>
-              <p style={{ margin: 0, fontSize: "0.85rem", color: "#64748b" }}>
-                Querying multi-provider Sepolia RPC failover circuit breaker &amp; scan frequency registry.
-              </p>
-            </div>
-          ) : currentVerification ? (
-            <div>
-              {/* COUNTERFEIT / EMERGENCY RED ALERT BANNER */}
-              {isCounterfeitOrBad ? (
-                <div
-                  style={{
-                    backgroundColor: "rgba(127, 29, 29, 0.3)",
-                    border: "2px solid #ef4444",
-                    borderRadius: "16px",
-                    padding: "24px",
-                    marginBottom: "20px",
-                    boxShadow: "0 0 30px rgba(239, 68, 68, 0.2)",
-                  }}
-                >
-                  <div style={{ display: "flex", alignItems: "flex-start", gap: "16px" }}>
-                    <div
-                      style={{
-                        width: "48px",
-                        height: "48px",
-                        borderRadius: "12px",
-                        backgroundColor: "#ef4444",
-                        display: "flex",
-                        alignItems: "center",
-                        justifyContent: "center",
-                        color: "#fff",
-                        flexShrink: 0,
-                      }}
-                    >
-                      <AlertOctagon size={28} />
-                    </div>
-                    <div style={{ flex: 1 }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: "8px", flexWrap: "wrap" }}>
-                        <span
-                          style={{
-                            backgroundColor: "#b91c1c",
-                            color: "#fff",
-                            fontSize: "0.75rem",
-                            fontWeight: 800,
-                            padding: "3px 10px",
-                            borderRadius: "6px",
-                            letterSpacing: "0.05em",
-                            textTransform: "uppercase",
-                          }}
-                        >
-                          CRITICAL: DO NOT DISPENSE
-                        </span>
-                        <span style={{ fontSize: "0.85rem", color: "#fca5a5", fontWeight: 600 }}>
-                          Tier {currentVerification.tierFailed || (currentVerification.diversionDetected ? 3 : 2)} Violation
-                        </span>
-                      </div>
-                      <h2 style={{ margin: "8px 0 6px", fontSize: "1.3rem", fontWeight: 700, color: "#fee2e2" }}>
-                        {currentVerification.reason || "Counterfeit or Compromised Stock Detected"}
-                      </h2>
-                      <p style={{ margin: "0 0 16px", fontSize: "0.9rem", color: "#fca5a5", lineHeight: 1.5 }}>
-                        {currentVerification.message}
-                      </p>
-
-                      {/* Quarantine Action Button */}
-                      <div style={{ display: "flex", alignItems: "center", gap: "12px", flexWrap: "wrap" }}>
-                        <button
-                          type="button"
-                          disabled={isLoggingIncident || Boolean(incidentLoggedId)}
-                          onClick={handleQuarantineIncident}
-                          style={{
-                            backgroundColor: incidentLoggedId ? "#059669" : "#dc2626",
-                            color: "#fff",
-                            border: "none",
-                            borderRadius: "8px",
-                            padding: "10px 20px",
-                            fontSize: "0.88rem",
-                            fontWeight: 700,
-                            cursor: incidentLoggedId ? "default" : "pointer",
-                            display: "flex",
-                            alignItems: "center",
-                            gap: "8px",
-                          }}
-                        >
-                          <ShieldAlert size={18} />
-                          {incidentLoggedId
-                            ? `Quarantine Logged (${incidentLoggedId})`
-                            : isLoggingIncident
-                            ? "Logging Incident..."
-                            : "Lock & Quarantine Stock"}
-                        </button>
-                        {incidentLoggedId && (
-                          <span style={{ fontSize: "0.8rem", color: "#86efac" }}>
-                            Incident recorded on regulatory audit trail.
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              ) : null}
-
-              {/* SUCCESS / DETAILS PANEL */}
-              <div
-                style={{
-                  backgroundColor: "#0f172a",
-                  border: isCounterfeitOrBad ? "1px solid #334155" : "1px solid #10b981",
-                  borderRadius: "16px",
-                  overflow: "hidden",
-                }}
-              >
-                {/* Header status */}
-                <div
-                  style={{
-                    padding: "18px 24px",
-                    borderBottom: "1px solid #1e293b",
-                    backgroundColor: isCounterfeitOrBad ? "#1e293b" : "rgba(16, 185, 129, 0.1)",
-                    display: "flex",
-                    alignItems: "center",
-                    justifyContent: "space-between",
-                    flexWrap: "wrap",
-                    gap: "12px",
-                  }}
-                >
-                  <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-                    {isCounterfeitOrBad ? (
-                      <XCircle size={24} color="#ef4444" />
-                    ) : (
-                      <CheckCircle2 size={24} color="#10b981" />
-                    )}
-                    <div>
-                      <h3 style={{ margin: 0, fontSize: "1.1rem", color: "#fff" }}>
-                        Unit #{currentVerification.unit?.id || scannedUnitId}
-                      </h3>
-                      <span style={{ fontSize: "0.8rem", color: isCounterfeitOrBad ? "#f87171" : "#34d399" }}>
-                        {isCounterfeitOrBad ? "Audit Failed" : "Authentic & Verified in Sepolia Registry"}
-                      </span>
-                    </div>
-                  </div>
-
-                  {currentVerification.unit && (
-                    <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                      <span
-                        style={{
-                          backgroundColor: "#334155",
-                          color: "#94a3b8",
-                          fontSize: "0.75rem",
-                          padding: "4px 10px",
-                          borderRadius: "6px",
-                          fontWeight: 600,
-                        }}
-                      >
-                        {currentVerification.unit.levelName}
-                      </span>
-                      <span
-                        style={{
-                          backgroundColor:
-                            currentVerification.unit.status === 0
-                              ? "rgba(16, 185, 129, 0.2)"
-                              : currentVerification.unit.status === 2
-                              ? "rgba(239, 68, 68, 0.2)"
-                              : "rgba(245, 158, 11, 0.2)",
-                          color:
-                            currentVerification.unit.status === 0
-                              ? "#34d399"
-                              : currentVerification.unit.status === 2
-                              ? "#f87171"
-                              : "#fbbf24",
-                          fontSize: "0.75rem",
-                          padding: "4px 10px",
-                          borderRadius: "6px",
-                          fontWeight: 700,
-                        }}
-                      >
-                        Status: {currentVerification.unit.statusName}
-                      </span>
-                    </div>
-                  )}
-                </div>
-
-                <div style={{ padding: "24px" }}>
-                  {/* Medication Metadata */}
-                  {currentVerification.unit && (
-                    <div style={{ marginBottom: "24px" }}>
-                      <div style={{ display: "flex", alignItems: "center", gap: "8px", marginBottom: "8px" }}>
-                        <Pill size={18} color="#38bdf8" />
-                        <h4 style={{ margin: 0, fontSize: "1.05rem", color: "#f8fafc" }}>
-                          {currentVerification.unit.metadata}
-                        </h4>
-                      </div>
-
-                      <div
-                        style={{
-                          display: "grid",
-                          gridTemplateColumns: "repeat(auto-fit, minmax(200px, 1fr))",
-                          gap: "12px",
-                          backgroundColor: "#020617",
-                          padding: "14px",
-                          borderRadius: "10px",
-                          border: "1px solid #1e293b",
-                          fontSize: "0.82rem",
-                        }}
-                      >
-                        <div>
-                          <span style={{ color: "#64748b" }}>Available Quantity:</span>
-                          <div style={{ fontSize: "1.1rem", fontWeight: 700, color: "#34d399", marginTop: "2px" }}>
-                            {currentVerification.unit.quantity} units
-                          </div>
-                        </div>
-                        <div>
-                          <span style={{ color: "#64748b" }}>Manufacturer:</span>
-                          <div style={{ color: "#cbd5e1", marginTop: "2px" }}>
-                            {formatAddress(currentVerification.unit.manufacturer)}
-                          </div>
-                        </div>
-                        <div>
-                          <span style={{ color: "#64748b" }}>Current On-Chain Owner:</span>
-                          <div style={{ color: "#cbd5e1", marginTop: "2px" }}>
-                            {formatAddress(currentVerification.unit.currentOwner)}
-                          </div>
-                        </div>
-                        <div>
-                          <span style={{ color: "#64748b" }}>QR Scan Frequency:</span>
-                          <div style={{ color: currentVerification.scanRecord?.scanCount === 1 ? "#34d399" : "#fbbf24", marginTop: "2px" }}>
-                            {currentVerification.scanRecord?.scanCount === 1
-                              ? "First time scanned (Pristine)"
-                              : `Scanned ${currentVerification.scanRecord?.scanCount || 0} times`}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* 4-Tier + Scratch Audit Breakdown */}
-                  <div style={{ marginBottom: "24px" }}>
-                    <h5 style={{ margin: "0 0 12px", fontSize: "0.85rem", color: "#94a3b8", textTransform: "uppercase", letterSpacing: "0.05em" }}>
-                      Anti-Counterfeit Integrity Checks
-                    </h5>
-                    <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                      {/* Tier 1 */}
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "space-between",
-                          padding: "10px 14px",
-                          borderRadius: "8px",
-                          backgroundColor: "#020617",
-                          border: "1px solid #1e293b",
-                        }}
-                      >
-                        <span style={{ fontSize: "0.84rem", color: "#cbd5e1" }}>
-                          Tier 1: On-Chain Genesis Registration
-                        </span>
-                        <span
-                          style={{
-                            color: currentVerification.tiers?.tier1_registered ? "#34d399" : "#f87171",
-                            fontSize: "0.8rem",
-                            fontWeight: 600,
-                          }}
-                        >
-                          {currentVerification.tiers?.tier1_registered ? "✓ Valid Unit ID" : "✕ Unregistered ID"}
-                        </span>
-                      </div>
-
-                      {/* Tier 2 */}
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "space-between",
-                          padding: "10px 14px",
-                          borderRadius: "8px",
-                          backgroundColor: "#020617",
-                          border: "1px solid #1e293b",
-                        }}
-                      >
-                        <span style={{ fontSize: "0.84rem", color: "#cbd5e1" }}>
-                          Tier 2: Anti-Replay &amp; Double-Dispensing
-                        </span>
-                        <span
-                          style={{
-                            color: currentVerification.tiers?.tier2_unsold ? "#34d399" : "#f87171",
-                            fontSize: "0.8rem",
-                            fontWeight: 600,
-                          }}
-                        >
-                          {currentVerification.tiers?.tier2_unsold ? "✓ Unsold & Active" : "✕ Already Sold (Replay)"}
-                        </span>
-                      </div>
-
-                      {/* Tier 3 */}
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "space-between",
-                          padding: "10px 14px",
-                          borderRadius: "8px",
-                          backgroundColor: "#020617",
-                          border: "1px solid #1e293b",
-                        }}
-                      >
-                        <span style={{ fontSize: "0.84rem", color: "#cbd5e1" }}>
-                          Tier 3: Handshake Custody &amp; Anti-Diversion
-                        </span>
-                        <span
-                          style={{
-                            color: !currentVerification.diversionDetected ? "#34d399" : "#fbbf24",
-                            fontSize: "0.8rem",
-                            fontWeight: 600,
-                          }}
-                        >
-                          {!currentVerification.diversionDetected
-                            ? "✓ Authorized Vendor Stock"
-                            : "⚠ Diverted Stock (Owner Mismatch)"}
-                        </span>
-                      </div>
-
-                      {/* Tier 4 */}
-                      <div
-                        style={{
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "space-between",
-                          padding: "10px 14px",
-                          borderRadius: "8px",
-                          backgroundColor: "#020617",
-                          border: "1px solid #1e293b",
-                        }}
-                      >
-                        <span style={{ fontSize: "0.84rem", color: "#cbd5e1" }}>
-                          Tier 4: Transit Integrity &amp; Contamination
-                        </span>
-                        <span
-                          style={{
-                            color: currentVerification.tiers?.tier4_integrity ? "#34d399" : "#f87171",
-                            fontSize: "0.8rem",
-                            fontWeight: 600,
-                          }}
-                        >
-                          {currentVerification.tiers?.tier4_integrity ? "✓ Verified Transit" : "✕ Rejected / Recalled"}
-                        </span>
-                      </div>
-
-                      {/* Tier 5: Tamper-Evident Scratch Seal */}
-                      <div
-                        style={{
-                          padding: "12px 14px",
-                          borderRadius: "8px",
-                          backgroundColor: "#020617",
-                          border: "1px solid #1e293b",
-                        }}
-                      >
-                        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                          <span style={{ fontSize: "0.84rem", color: "#cbd5e1" }}>
-                            Tier 5: Cryptographic Scratch-Off Seal PIN
-                          </span>
-                          <span
-                            style={{
-                              color:
-                                currentVerification.tamperSealStatus === "verified"
-                                  ? "#34d399"
-                                  : currentVerification.tamperSealStatus === "invalid"
-                                  ? "#f87171"
-                                  : "#94a3b8",
-                              fontSize: "0.8rem",
-                              fontWeight: 600,
-                            }}
-                          >
-                            {currentVerification.tamperSealStatus === "verified"
-                              ? "✓ Cryptographically Verified"
-                              : currentVerification.tamperSealStatus === "invalid"
-                              ? "✕ Invalid Secret PIN"
-                              : "Optional Verification"}
-                          </span>
-                        </div>
-
-                        {currentVerification.tamperSealStatus !== "verified" && (
-                          <div style={{ display: "flex", gap: "8px", marginTop: "10px" }}>
-                            <input
-                              type="text"
-                              placeholder={`Enter scratch PIN (e.g. ${currentVerification.unit?.manufacturer.slice(-4) || "1537"})`}
-                              value={scratchSecret}
-                              onChange={(e) => setScratchSecret(e.target.value)}
-                              style={{
-                                flex: 1,
-                                backgroundColor: "#0b0f19",
-                                border: "1px solid #334155",
-                                borderRadius: "6px",
-                                padding: "6px 10px",
-                                fontSize: "0.8rem",
-                                color: "#f8fafc",
-                              }}
-                            />
-                            <button
-                              type="button"
-                              onClick={handleVerifyTamperPin}
-                              style={{
-                                backgroundColor: "#334155",
-                                color: "#f1f5f9",
-                                border: "none",
-                                borderRadius: "6px",
-                                padding: "6px 14px",
-                                fontSize: "0.78rem",
-                                fontWeight: 600,
-                                cursor: "pointer",
-                              }}
-                            >
-                              Verify PIN
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* DISPENSING / SALE WORKFLOW (Active Only) */}
-                  {!isCounterfeitOrBad && currentVerification.unit && (
-                    <div
-                      style={{
-                        backgroundColor: "rgba(16, 185, 129, 0.05)",
-                        border: "1px solid rgba(16, 185, 129, 0.2)",
-                        borderRadius: "12px",
-                        padding: "18px",
-                      }}
-                    >
-                      <h5 style={{ margin: "0 0 12px", fontSize: "0.95rem", color: "#34d399", fontWeight: 700 }}>
-                        Dispense at Point of Sale
-                      </h5>
-
-                      <div style={{ display: "flex", alignItems: "center", gap: "16px", flexWrap: "wrap", marginBottom: "16px" }}>
-                        <div>
-                          <span style={{ fontSize: "0.78rem", color: "#94a3b8", display: "block", marginBottom: "4px" }}>
-                            Dispensing Quantity:
-                          </span>
-                          <div style={{ display: "flex", alignItems: "center", gap: "6px" }}>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                playClickSound();
-                                setDispenseQty((q) => Math.max(1, q - 1));
-                              }}
-                              style={{
-                                width: "32px",
-                                height: "32px",
-                                borderRadius: "6px",
-                                border: "1px solid #334155",
-                                backgroundColor: "#1e293b",
-                                color: "#fff",
-                                fontSize: "1rem",
-                                cursor: "pointer",
-                              }}
-                            >
-                              -
-                            </button>
-                            <input
-                              type="number"
-                              min={1}
-                              max={Number(currentVerification.unit.quantity)}
-                              value={dispenseQty}
-                              onChange={(e) =>
-                                setDispenseQty(
-                                  Math.min(Number(currentVerification.unit?.quantity || 1), Math.max(1, Number(e.target.value)))
-                                )
-                              }
-                              style={{
-                                width: "64px",
-                                textAlign: "center",
-                                backgroundColor: "#020617",
-                                border: "1px solid #334155",
-                                borderRadius: "6px",
-                                padding: "6px",
-                                color: "#fff",
-                                fontWeight: 700,
-                                fontSize: "0.95rem",
-                              }}
-                            />
-                            <button
-                              type="button"
-                              onClick={() => {
-                                playClickSound();
-                                setDispenseQty((q) =>
-                                  Math.min(Number(currentVerification.unit?.quantity || 1), q + 1)
-                                );
-                              }}
-                              style={{
-                                width: "32px",
-                                height: "32px",
-                                borderRadius: "6px",
-                                border: "1px solid #334155",
-                                backgroundColor: "#1e293b",
-                                color: "#fff",
-                                fontSize: "1rem",
-                                cursor: "pointer",
-                              }}
-                            >
-                              +
-                            </button>
-                          </div>
-                        </div>
-
-                        {/* Presets */}
-                        <div style={{ display: "flex", gap: "6px", alignItems: "flex-end" }}>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              playClickSound();
-                              setDispenseQty(1);
-                            }}
-                            style={{
-                              backgroundColor: "#1e293b",
-                              border: "1px solid #334155",
-                              color: "#cbd5e1",
-                              borderRadius: "6px",
-                              padding: "7px 12px",
-                              fontSize: "0.78rem",
-                              cursor: "pointer",
-                            }}
-                          >
-                            1 Unit
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              playClickSound();
-                              setDispenseQty(Math.min(10, Number(currentVerification.unit?.quantity || 1)));
-                            }}
-                            style={{
-                              backgroundColor: "#1e293b",
-                              border: "1px solid #334155",
-                              color: "#cbd5e1",
-                              borderRadius: "6px",
-                              padding: "7px 12px",
-                              fontSize: "0.78rem",
-                              cursor: "pointer",
-                            }}
-                          >
-                            10 Units
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              playClickSound();
-                              setDispenseQty(Number(currentVerification.unit?.quantity || 1));
-                            }}
-                            style={{
-                              backgroundColor: "#1e293b",
-                              border: "1px solid #334155",
-                              color: "#cbd5e1",
-                              borderRadius: "6px",
-                              padding: "7px 12px",
-                              fontSize: "0.78rem",
-                              cursor: "pointer",
-                            }}
-                          >
-                            Full Pack ({currentVerification.unit.quantity})
-                          </button>
-                        </div>
-                      </div>
-
-                      {/* Main Action Button */}
-                      <button
-                        type="button"
-                        disabled={isDispensing || Number(currentVerification.unit.quantity) === 0}
-                        onClick={handleDispense}
-                        style={{
-                          width: "100%",
-                          backgroundColor: "#059669",
-                          color: "#fff",
-                          border: "none",
-                          borderRadius: "10px",
-                          padding: "14px",
-                          fontSize: "1rem",
-                          fontWeight: 700,
-                          cursor: isDispensing ? "not-allowed" : "pointer",
-                          display: "flex",
-                          alignItems: "center",
-                          justifyContent: "center",
-                          gap: "10px",
-                          boxShadow: "0 4px 14px rgba(5, 150, 105, 0.4)",
-                        }}
-                      >
-                        <Zap size={20} />
-                        {isDispensing
-                          ? "Broadcasting On-Chain Dispensing..."
-                          : `Confirm & Mark ${dispenseQty} Unit(s) as Sold (Gasless)`}
-                      </button>
-
-                      {/* Dispense Receipt */}
-                      {dispenseResult && (
-                        <div
-                          style={{
-                            marginTop: "16px",
-                            backgroundColor: "rgba(16, 185, 129, 0.15)",
-                            border: "1px solid #10b981",
-                            borderRadius: "10px",
-                            padding: "14px",
-                          }}
-                        >
-                          <div style={{ display: "flex", alignItems: "center", gap: "8px", color: "#34d399", fontWeight: 700 }}>
-                            <CheckCircle2 size={18} />
-                            Dispensing Confirmed on Ethereum Sepolia!
-                          </div>
-                          <p style={{ margin: "6px 0 10px", fontSize: "0.85rem", color: "#cbd5e1" }}>
-                            Successfully dispensed {dispenseResult.dispensedQty} unit(s). Remaining stock on-chain:{" "}
-                            <strong>{dispenseResult.remainingQty}</strong>.
-                          </p>
-                          <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                            <a
-                              href={`https://sepolia.etherscan.io/tx/${dispenseResult.txHash}`}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              style={{
-                                color: "#38bdf8",
-                                fontSize: "0.8rem",
-                                display: "flex",
-                                alignItems: "center",
-                                gap: "4px",
-                                textDecoration: "none",
-                              }}
-                            >
-                              View Transaction on Etherscan <ExternalLink size={12} />
-                            </a>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          ) : (
-            /* Standby Card when no scan has occurred yet */
-            <div
-              style={{
-                backgroundColor: "#0f172a",
-                border: "1px dashed #334155",
-                borderRadius: "16px",
-                padding: "60px 24px",
-                textAlign: "center",
-              }}
-            >
-              <div
-                style={{
-                  width: "64px",
-                  height: "64px",
-                  borderRadius: "50%",
-                  backgroundColor: "rgba(59, 130, 246, 0.1)",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  margin: "0 auto 16px",
-                  color: "#60a5fa",
-                }}
-              >
-                <Scan size={32} />
-              </div>
-              <h3 style={{ margin: "0 0 8px", fontSize: "1.2rem", fontWeight: 600, color: "#f8fafc" }}>
-                Ready to Scan Medicine Packaging
-              </h3>
-              <p style={{ margin: "0 auto 20px", fontSize: "0.88rem", color: "#64748b", maxWidth: "400px" }}>
-                Aim your handheld optical barcode gun or device camera at the unit QR code to verify on-chain
-                authenticity, check tamper seals, or mark as dispensed.
-              </p>
-              <div style={{ display: "inline-flex", alignItems: "center", gap: "8px", fontSize: "0.8rem", color: "#94a3b8" }}>
-                <span style={{ width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "#10b981" }} />
-                <span>Zero Double-Spending Protection Active</span>
-              </div>
-            </div>
-          )}
-
-          {/* ================= RECENT SHIFT ACTIVITY DRAWER ================= */}
-          <div
-            style={{
-              backgroundColor: "#0f172a",
-              border: "1px solid #1e293b",
-              borderRadius: "16px",
-              padding: "20px",
-            }}
-          >
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: "14px" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: "8px" }}>
-                <History size={18} color="#94a3b8" />
-                <h4 style={{ margin: 0, fontSize: "0.95rem", fontWeight: 600, color: "#e2e8f0" }}>
-                  Terminal Scan Activity Log
-                </h4>
-              </div>
-              <span style={{ fontSize: "0.75rem", color: "#64748b" }}>
-                {scanHistory.length} event(s) recorded this session
-              </span>
-            </div>
-
-            {scanHistory.length === 0 ? (
-              <p style={{ margin: 0, fontSize: "0.8rem", color: "#64748b", textAlign: "center", padding: "16px" }}>
-                No scans recorded yet in this shift.
-              </p>
-            ) : (
-              <div style={{ display: "flex", flexDirection: "column", gap: "8px", maxHeight: "260px", overflowY: "auto" }}>
-                {scanHistory.map((item) => (
-                  <div
-                    key={item.id}
-                    style={{
-                      display: "flex",
-                      alignItems: "center",
-                      justifyContent: "space-between",
-                      padding: "10px 14px",
-                      borderRadius: "8px",
-                      backgroundColor: "#020617",
-                      border: "1px solid #1e293b",
-                      fontSize: "0.82rem",
-                    }}
-                  >
-                    <div style={{ display: "flex", alignItems: "center", gap: "10px" }}>
-                      {item.type === "VERIFIED" && <CheckCircle2 size={16} color="#34d399" />}
-                      {item.type === "COUNTERFEIT" && <AlertTriangle size={16} color="#f87171" />}
-                      {item.type === "DISPENSED" && <Zap size={16} color="#60a5fa" />}
-                      {item.type === "QUARANTINED" && <ShieldAlert size={16} color="#ef4444" />}
-                      <div>
-                        <div style={{ fontWeight: 600, color: "#f1f5f9" }}>{item.title}</div>
-                        <div style={{ fontSize: "0.74rem", color: "#64748b" }}>{item.details}</div>
-                      </div>
-                    </div>
-                    <div style={{ fontSize: "0.72rem", color: "#475569", flexShrink: 0 }}>
-                      {new Date(item.timestamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-        </section>
-      </main>
+        </main>
+      </div>
     </div>
   );
 }
