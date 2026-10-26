@@ -1,6 +1,6 @@
 "use client";
 
-import React, { Suspense, useEffect, useState } from "react";
+import React, { Suspense, useEffect, useState, useRef } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { ethers } from "ethers";
@@ -16,6 +16,7 @@ import { StatusBadge } from "@/components/ui/StatusBadge";
 import { CopyableHash } from "@/components/ui/CopyableHash";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { formatAddress, formatDate } from "@/lib/format";
+import { playBeepSuccess, playSirenAlarm } from "@/lib/audio-alerts";
 import {
   AlertTriangle,
   XCircle,
@@ -29,11 +30,16 @@ import {
   History,
   Plus,
   ShieldCheck,
+  ShieldAlert,
   Layers,
   Clock,
   Eye,
   Pill,
   Box,
+  ShoppingCart,
+  Volume2,
+  VolumeX,
+  UserCheck,
 } from "lucide-react";
 
 type UnitRecord = {
@@ -81,6 +87,96 @@ function VerifyContent() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Role-adaptive wallet & sound state
+  const [account, setAccount] = useState<string | null>(null);
+  const [isHandlerOrAdmin, setIsHandlerOrAdmin] = useState(false);
+  const [actionLoading, setActionLoading] = useState(false);
+  const [actionSuccessMsg, setActionSuccessMsg] = useState<string | null>(null);
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const soundEnabledRef = useRef(soundEnabled);
+  useEffect(() => {
+    soundEnabledRef.current = soundEnabled;
+  }, [soundEnabled]);
+
+  // Auto-detect connected wallet for role-adaptive view
+  useEffect(() => {
+    if (typeof window !== "undefined" && (window as any).ethereum) {
+      (window as any).ethereum
+        .request({ method: "eth_accounts" })
+        .then((accounts: string[]) => {
+          if (accounts && accounts[0]) {
+            const userAddr = accounts[0].toLowerCase();
+            setAccount(userAddr);
+            const contract = new ethers.Contract(PHARMA_TREE_CONTRACT, PHARMA_TREE_ABI, readonlyProvider);
+            Promise.all([contract.isHandler(userAddr), contract.isManufacturer(userAddr)])
+              .then(([isHandler, isMfr]) => {
+                setIsHandlerOrAdmin(Boolean(isHandler || isMfr));
+              })
+              .catch(() => {});
+          }
+        })
+        .catch(() => {});
+    }
+  }, []);
+
+  async function handleAcceptTransfer() {
+    if (!unit || !(window as any).ethereum) return;
+    setActionLoading(true);
+    setActionSuccessMsg(null);
+    try {
+      const provider = new ethers.BrowserProvider((window as any).ethereum);
+      const signer = await provider.getSigner();
+      const contract = new ethers.Contract(PHARMA_TREE_CONTRACT, PHARMA_TREE_ABI, signer);
+      const tx = await contract.acceptTransfer(BigInt(unit.id));
+      await tx.wait(1);
+      setActionSuccessMsg(`Shipment #${unit.id} accepted into your custody! Tx: ${formatAddress(tx.hash)}`);
+      setUnit((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: 0,
+              currentOwner: account || prev.currentOwner,
+              pendingReceiver: ethers.ZeroAddress,
+            }
+          : prev
+      );
+      if (soundEnabled) playBeepSuccess();
+    } catch (err: any) {
+      alert(err.reason || err.message || "Failed to accept shipment.");
+      if (soundEnabled) playSirenAlarm();
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
+  async function handleRejectTransfer() {
+    if (!unit || !(window as any).ethereum) return;
+    setActionLoading(true);
+    setActionSuccessMsg(null);
+    try {
+      const provider = new ethers.BrowserProvider((window as any).ethereum);
+      const signer = await provider.getSigner();
+      const contract = new ethers.Contract(PHARMA_TREE_CONTRACT, PHARMA_TREE_ABI, signer);
+      const tx = await contract.rejectTransfer(BigInt(unit.id));
+      await tx.wait(1);
+      setActionSuccessMsg(`Shipment #${unit.id} rejected and returned to sender. Tx: ${formatAddress(tx.hash)}`);
+      setUnit((prev) =>
+        prev
+          ? {
+              ...prev,
+              status: 3,
+              pendingReceiver: ethers.ZeroAddress,
+            }
+          : prev
+      );
+      if (soundEnabled) playSirenAlarm();
+    } catch (err: any) {
+      alert(err.reason || err.message || "Failed to reject shipment.");
+    } finally {
+      setActionLoading(false);
+    }
+  }
+
   useEffect(() => {
     const id = searchParams.get("unitId");
     if (id) {
@@ -102,6 +198,7 @@ function VerifyContent() {
       setTimeline([]);
       setScanData(null);
 
+      let fetchedScan: ScanRecord | null = null;
       // 1. Post to scan tracking API
       try {
         const scanRes = await fetch("/api/scan", {
@@ -112,6 +209,7 @@ function VerifyContent() {
         if (scanRes.ok) {
           const scanJson = await scanRes.json();
           if (!cancelled && scanJson.scanCount) {
+            fetchedScan = scanJson;
             setScanData(scanJson);
           }
         }
@@ -174,6 +272,19 @@ function VerifyContent() {
         if (cancelled) return;
         setUnit(loadedUnit);
         setLineage(lineageUnits);
+
+        // Sound cues for consumer/handler
+        if (soundEnabledRef.current) {
+          if (loadedUnit.status === 2 && fetchedScan && fetchedScan.scanCount > 1) {
+            playSirenAlarm();
+          } else if (loadedUnit.status === 2) {
+            playBeepSuccess();
+          } else if (loadedUnit.status === 3) {
+            playSirenAlarm();
+          } else {
+            playBeepSuccess();
+          }
+        }
 
         // Map unit ID to record for quick lookup
         const unitMap = new Map<string, UnitRecord>();
@@ -408,12 +519,22 @@ function VerifyContent() {
       icon: AlertTriangle,
     };
   } else if (isSold) {
-    verdict = {
-      title: "Verified Authentic Pharmaceutical - Dispensed & Purchased",
-      description: `Cryptographically verified on Ethereum Sepolia. Dispensed to patient by authorized distributor/pharmacy ${unit ? formatAddress(unit.currentOwner) : ""}.`,
-      variant: "info",
-      icon: CheckCircle2,
-    };
+    const isReplay = Boolean(scanData && scanData.scanCount > 1);
+    if (isReplay) {
+      verdict = {
+        title: `🚨 COUNTERFEIT WARNING: CLONED QR REPLAY (${scanData?.scanCount} Scans Detected)`,
+        description: `This packaging QR code was already marked as SOLD on-chain and has now been scanned ${scanData?.scanCount} times. If you did not personally purchase this from the registered pharmacy or are holding an unpurchased box, REJECT IT AS IT IS — this packaging QR may be a cloned counterfeit duplicate sticker!`,
+        variant: "danger",
+        icon: XCircle,
+      };
+    } else {
+      verdict = {
+        title: "✅ Legitimate Purchase: Officially Dispensed & Sold",
+        description: `Cryptographically verified on Ethereum Sepolia. Legally dispensed to patient by authorized pharmacy ${unit ? formatAddress(unit.currentOwner) : ""}. You are inspecting the verified dispensed portion.`,
+        variant: "success",
+        icon: CheckCircle2,
+      };
+    }
   } else if (isActive) {
     verdict = {
       title: "Verified Authentic Pharmaceutical - In Stock",
@@ -475,26 +596,67 @@ function VerifyContent() {
           </span>
         </Link>
 
-        <Link
-          href="/"
-          style={{
-            display: "inline-flex",
-            alignItems: "center",
-            gap: "var(--space-2)",
-            minHeight: "44px",
-            padding: "0 var(--space-3)",
-            borderRadius: "var(--radius-control)",
-            border: "1px solid var(--color-border-default)",
-            backgroundColor: "var(--color-bg-surface)",
-            fontSize: "var(--text-xs)",
-            fontWeight: 600,
-            color: "var(--color-text-main)",
-            transition: "all var(--transition-fast)",
-          }}
-        >
-          <ArrowLeft size={16} />
-          <span>Dashboard</span>
-        </Link>
+        <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+          {account && (
+            <span
+              style={{
+                fontSize: "11px",
+                color: "var(--color-primary)",
+                backgroundColor: "var(--color-primary-subtle)",
+                padding: "4px 8px",
+                borderRadius: "var(--radius-pill)",
+                fontWeight: 600,
+                border: "1px solid var(--color-primary-border)",
+              }}
+            >
+              {isHandlerOrAdmin ? "Handler: " : "Wallet: "}
+              {formatAddress(account)}
+            </span>
+          )}
+
+          <button
+            type="button"
+            onClick={() => setSoundEnabled(!soundEnabled)}
+            aria-label={soundEnabled ? "Mute audio cues" : "Unmute audio cues"}
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "4px",
+              padding: "6px 10px",
+              borderRadius: "var(--radius-control)",
+              border: "1px solid var(--color-border-default)",
+              backgroundColor: "var(--color-bg-subtle)",
+              color: soundEnabled ? "var(--color-primary)" : "var(--color-text-muted)",
+              cursor: "pointer",
+              fontSize: "var(--text-xs)",
+              fontWeight: 600,
+            }}
+          >
+            {soundEnabled ? <Volume2 size={16} /> : <VolumeX size={16} />}
+            <span>{soundEnabled ? "Audio ON" : "Audio OFF"}</span>
+          </button>
+
+          <Link
+            href="/"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: "var(--space-2)",
+              minHeight: "36px",
+              padding: "0 var(--space-3)",
+              borderRadius: "var(--radius-control)",
+              border: "1px solid var(--color-border-default)",
+              backgroundColor: "var(--color-bg-surface)",
+              fontSize: "var(--text-xs)",
+              fontWeight: 600,
+              color: "var(--color-text-main)",
+              transition: "all var(--transition-fast)",
+            }}
+          >
+            <ArrowLeft size={16} />
+            <span>Dashboard</span>
+          </Link>
+        </div>
       </header>
 
       {/* Main Container */}
@@ -714,7 +876,339 @@ function VerifyContent() {
               </div>
             </Card>
 
-            {/* 2. Anti-Counterfeit Verification Frequency Badge */}
+            {/* 2. Critical Replay Rejection Warning Banner */}
+            {isSold && scanData && scanData.scanCount > 1 && (
+              <Card
+                padding="md"
+                style={{
+                  border: "2px solid var(--color-danger)",
+                  backgroundColor: "var(--color-danger-subtle)",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "flex-start", gap: "var(--space-3)" }}>
+                  <ShieldAlert size={28} style={{ color: "var(--color-danger)", flexShrink: 0, marginTop: "2px" }} />
+                  <div style={{ display: "flex", flexDirection: "column", gap: "4px" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap" }}>
+                      <strong style={{ fontSize: "var(--text-base)", color: "var(--color-danger)" }}>
+                        REJECT AS IT IS (DO NOT ACCEPT OR CONSUME)
+                      </strong>
+                      <span
+                        style={{
+                          fontSize: "11px",
+                          fontWeight: 800,
+                          padding: "2px 8px",
+                          borderRadius: "var(--radius-pill)",
+                          backgroundColor: "#fee2e2",
+                          color: "var(--color-danger)",
+                          border: "1px solid var(--color-danger-border)",
+                        }}
+                      >
+                        {scanData.scanCount} Duplicate Scans
+                      </span>
+                    </div>
+                    <p style={{ margin: "4px 0 0", fontSize: "var(--text-xs)", color: "var(--color-text-main)", lineHeight: 1.5 }}>
+                      <strong>CRITICAL SAFETY WARNING:</strong> This medicine was already sold on Ethereum Sepolia and this QR code has been read {scanData.scanCount} times. Counterfeiters commonly photograph genuine sold packaging and print duplicate stickers onto fake or dangerous medicines. <strong>If you did not personally purchase this from the authorized pharmacy, this package is compromised. Refuse to accept it.</strong>
+                    </p>
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {/* 3. Interactive Visual Journey Stepper (Manufacturer -> B2B Handshake -> POS Dispensed -> Patient Verified) */}
+            <Card padding="md">
+              <h3 style={{ margin: "0 0 var(--space-3)", fontSize: "var(--text-sm)", fontWeight: 700, color: "var(--color-text-main)" }}>
+                Verified End-to-End Pharmaceutical Supply Chain Journey
+              </h3>
+              <div
+                style={{
+                  display: "grid",
+                  gridTemplateColumns: "repeat(auto-fit, minmax(170px, 1fr))",
+                  gap: "var(--space-3)",
+                  position: "relative",
+                }}
+              >
+                {/* Step 1: Factory Genesis */}
+                <div
+                  style={{
+                    padding: "var(--space-3)",
+                    borderRadius: "var(--radius-control)",
+                    backgroundColor: "var(--color-bg-subtle)",
+                    border: "1px solid var(--color-success-border)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "4px",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "6px", color: "var(--color-success)", fontWeight: 700, fontSize: "var(--text-xs)" }}>
+                      <Factory size={16} /> 1. Genesis Packaged
+                    </div>
+                    <CheckCircle2 size={14} style={{ color: "var(--color-success)" }} />
+                  </div>
+                  <span style={{ fontSize: "11px", color: "var(--color-text-muted)" }}>
+                    Mfr: {unit ? formatAddress(unit.manufacturer) : "--"}
+                  </span>
+                  <span style={{ fontSize: "10px", color: "var(--color-success)", fontWeight: 600 }}>
+                    ✓ Serialized On-Chain
+                  </span>
+                </div>
+
+                {/* Step 2: B2B Custody Handshake */}
+                <div
+                  style={{
+                    padding: "var(--space-3)",
+                    borderRadius: "var(--radius-control)",
+                    backgroundColor: "var(--color-bg-subtle)",
+                    border: isFlagged
+                      ? "1px solid var(--color-danger-border)"
+                      : isPending
+                      ? "1px solid var(--color-warning-border)"
+                      : "1px solid var(--color-success-border)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "4px",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "6px",
+                        color: isFlagged ? "var(--color-danger)" : isPending ? "var(--color-warning)" : "var(--color-success)",
+                        fontWeight: 700,
+                        fontSize: "var(--text-xs)",
+                      }}
+                    >
+                      <Truck size={16} /> 2. B2B Handshakes
+                    </div>
+                    {isFlagged ? (
+                      <XCircle size={14} style={{ color: "var(--color-danger)" }} />
+                    ) : isPending ? (
+                      <Clock size={14} style={{ color: "var(--color-warning)" }} />
+                    ) : (
+                      <CheckCircle2 size={14} style={{ color: "var(--color-success)" }} />
+                    )}
+                  </div>
+                  <span style={{ fontSize: "11px", color: "var(--color-text-muted)" }}>
+                    {isPending ? `Pending -> ${formatAddress(unit?.pendingReceiver || "")}` : `Current: ${unit ? formatAddress(unit.currentOwner) : "--"}`}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: "10px",
+                      color: isFlagged ? "var(--color-danger)" : isPending ? "var(--color-warning)" : "var(--color-success)",
+                      fontWeight: 600,
+                    }}
+                  >
+                    {isFlagged ? "✕ Transfer Rejected" : isPending ? "⏳ In-Transit Dispatched" : "✓ Unbroken Custody"}
+                  </span>
+                </div>
+
+                {/* Step 3: Retail POS Dispensing */}
+                <div
+                  style={{
+                    padding: "var(--space-3)",
+                    borderRadius: "var(--radius-control)",
+                    backgroundColor: "var(--color-bg-subtle)",
+                    border: isSold
+                      ? "1px solid var(--color-success-border)"
+                      : isActive
+                      ? "1px solid #bfdbfe"
+                      : "1px solid var(--color-border-default)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "4px",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "6px",
+                        color: isSold ? "var(--color-success)" : isActive ? "#2563eb" : "var(--color-text-muted)",
+                        fontWeight: 700,
+                        fontSize: "var(--text-xs)",
+                      }}
+                    >
+                      <ShoppingCart size={16} /> 3. Pharmacy POS
+                    </div>
+                    {isSold ? (
+                      <CheckCircle2 size={14} style={{ color: "var(--color-success)" }} />
+                    ) : isActive ? (
+                      <span style={{ fontSize: "10px", color: "#2563eb", fontWeight: 700 }}>IN STOCK</span>
+                    ) : (
+                      <Clock size={14} style={{ color: "var(--color-text-muted)" }} />
+                    )}
+                  </div>
+                  <span style={{ fontSize: "11px", color: "var(--color-text-muted)" }}>
+                    {isSold ? "Marked Sold at POS" : isActive ? "Available at Pharmacy" : "Awaiting Delivery"}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: "10px",
+                      color: isSold ? "var(--color-success)" : isActive ? "#2563eb" : "var(--color-text-muted)",
+                      fontWeight: 600,
+                    }}
+                  >
+                    {isSold ? "✓ Sepolia Relayer Sold" : isActive ? "Ready for Dispensing" : "Pending Handshake"}
+                  </span>
+                </div>
+
+                {/* Step 4: Patient Verification */}
+                <div
+                  style={{
+                    padding: "var(--space-3)",
+                    borderRadius: "var(--radius-control)",
+                    backgroundColor: "var(--color-bg-subtle)",
+                    border:
+                      isSold && scanData && scanData.scanCount > 1
+                        ? "1px solid var(--color-danger-border)"
+                        : isSold
+                        ? "1px solid var(--color-success-border)"
+                        : "1px solid var(--color-border-default)",
+                    display: "flex",
+                    flexDirection: "column",
+                    gap: "4px",
+                  }}
+                >
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                    <div
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        gap: "6px",
+                        color:
+                          isSold && scanData && scanData.scanCount > 1
+                            ? "var(--color-danger)"
+                            : isSold
+                            ? "var(--color-success)"
+                            : "var(--color-text-muted)",
+                        fontWeight: 700,
+                        fontSize: "var(--text-xs)",
+                      }}
+                    >
+                      <ShieldCheck size={16} /> 4. Patient Check
+                    </div>
+                    {isSold && scanData && scanData.scanCount > 1 ? (
+                      <AlertTriangle size={14} style={{ color: "var(--color-danger)" }} />
+                    ) : isSold ? (
+                      <CheckCircle2 size={14} style={{ color: "var(--color-success)" }} />
+                    ) : (
+                      <Eye size={14} style={{ color: "var(--color-text-muted)" }} />
+                    )}
+                  </div>
+                  <span style={{ fontSize: "11px", color: "var(--color-text-muted)" }}>
+                    {scanData ? `Verified ${scanData.scanCount} Times` : "Live Verification"}
+                  </span>
+                  <span
+                    style={{
+                      fontSize: "10px",
+                      color:
+                        isSold && scanData && scanData.scanCount > 1
+                          ? "var(--color-danger)"
+                          : isSold
+                          ? "var(--color-success)"
+                          : "var(--color-text-muted)",
+                      fontWeight: 700,
+                    }}
+                  >
+                    {isSold && scanData && scanData.scanCount > 1
+                      ? "⚠️ REJECT AS CLONED"
+                      : isSold
+                      ? "✓ Authentic Patient Unit"
+                      : "Unpurchased Unit"}
+                  </span>
+                </div>
+              </div>
+            </Card>
+
+            {/* 4. Role-Adaptive Handler Reception Suite (1-Click Accept / Reject) */}
+            {unit.status === 1 && account && unit.pendingReceiver.toLowerCase() === account && (
+              <Card
+                padding="md"
+                style={{
+                  border: "2px solid var(--color-primary)",
+                  backgroundColor: "var(--color-primary-subtle)",
+                }}
+              >
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "var(--space-2)", marginBottom: "var(--space-2)" }}>
+                  <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", color: "var(--color-primary)", fontWeight: 700 }}>
+                    <Truck size={20} />
+                    <span>Inbound Shipment Assigned to Your Wallet</span>
+                  </div>
+                  <span style={{ fontSize: "11px", padding: "2px 8px", borderRadius: "var(--radius-pill)", backgroundColor: "var(--color-primary)", color: "#fff", fontWeight: 700 }}>
+                    Authorized Handler Action Required
+                  </span>
+                </div>
+                <p style={{ margin: "0 0 var(--space-3)", fontSize: "var(--text-xs)", color: "var(--color-text-main)", lineHeight: 1.5 }}>
+                  This package was dispatched from <strong>{formatAddress(unit.currentOwner)}</strong> directly to you. Inspect packaging condition, tamper seals, and temperature monitors, then accept or reject custody:
+                </p>
+
+                {actionSuccessMsg && (
+                  <div style={{ padding: "8px 12px", borderRadius: "var(--radius-control)", backgroundColor: "var(--color-success-bg)", border: "1px solid var(--color-success-border)", color: "var(--color-success)", fontSize: "var(--text-xs)", fontWeight: 700, marginBottom: "var(--space-3)" }}>
+                    ✓ {actionSuccessMsg}
+                  </div>
+                )}
+
+                <div style={{ display: "flex", gap: "var(--space-3)", flexWrap: "wrap" }}>
+                  <Button
+                    variant="primary"
+                    size="md"
+                    loading={actionLoading}
+                    disabled={actionLoading}
+                    onClick={handleAcceptTransfer}
+                    icon={<CheckCircle2 size={16} />}
+                  >
+                    Accept Shipment into Custody
+                  </Button>
+                  <Button
+                    variant="danger"
+                    size="md"
+                    loading={actionLoading}
+                    disabled={actionLoading}
+                    onClick={handleRejectTransfer}
+                    icon={<XCircle size={16} />}
+                  >
+                    Reject Damaged / Tampered Shipment
+                  </Button>
+                </div>
+              </Card>
+            )}
+
+            {/* 5. Role-Adaptive Handler Diagnostics (For Logisticians / Pharmacists) */}
+            {account && isHandlerOrAdmin && (
+              <Card padding="md" style={{ border: "1px solid var(--color-border-default)", backgroundColor: "var(--color-bg-surface)" }}>
+                <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", marginBottom: "var(--space-2)" }}>
+                  <UserCheck size={18} style={{ color: "var(--color-primary)" }} />
+                  <h4 style={{ margin: 0, fontSize: "var(--text-sm)", fontWeight: 700, color: "var(--color-text-main)" }}>
+                    Authorized Handler Diagnostics
+                  </h4>
+                </div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))", gap: "var(--space-2)", fontSize: "var(--text-xs)" }}>
+                  <div>
+                    <span style={{ color: "var(--color-text-muted)", display: "block" }}>Root Ancestor ID:</span>
+                    <strong>Unit #{unit.rootId || unit.id}</strong>
+                  </div>
+                  <div>
+                    <span style={{ color: "var(--color-text-muted)", display: "block" }}>Parent Container ID:</span>
+                    <strong>{unit.parentId && unit.parentId !== "0" ? `Unit #${unit.parentId}` : "None (Root Unit)"}</strong>
+                  </div>
+                  <div>
+                    <span style={{ color: "var(--color-text-muted)", display: "block" }}>Cold-Chain & Transit Integrity:</span>
+                    <strong style={{ color: isFlagged ? "var(--color-danger)" : "var(--color-success)" }}>
+                      {isFlagged ? "⚠️ Transit Breach / Flagged" : "✓ Sealed & Intact"}
+                    </strong>
+                  </div>
+                  <div>
+                    <span style={{ color: "var(--color-text-muted)", display: "block" }}>On-Hand Stock Qty:</span>
+                    <strong>{unit.quantity} Units Available</strong>
+                  </div>
+                </div>
+              </Card>
+            )}
+
+            {/* 6. Anti-Counterfeit Verification Frequency Badge */}
             {scanData && (
               <Card
                 padding="md"

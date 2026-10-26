@@ -466,6 +466,37 @@ export default function VendorPosPage() {
 
   const canCreate = Boolean(account) && (role.manufacturer || isAdmin);
 
+  const handleDispenseRef = useRef(handleDispense);
+  useEffect(() => {
+    handleDispenseRef.current = handleDispense;
+  });
+
+  // Single-key hotkey trigger for rapid checkout (Spacebar / Enter)
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      // Do not trigger if user is actively typing in an input or textarea
+      const target = e.target as HTMLElement;
+      if (target && (target.tagName === "INPUT" || target.tagName === "TEXTAREA" || target.isContentEditable)) {
+        return;
+      }
+
+      if (e.code === "Space" || e.key === "Enter") {
+        if (
+          currentVerification?.unit &&
+          !isCounterfeitOrBad &&
+          !isDispensing &&
+          Number(currentVerification.unit.quantity) > 0
+        ) {
+          e.preventDefault();
+          handleDispenseRef.current();
+        }
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [currentVerification, isCounterfeitOrBad, isDispensing]);
+
   return (
     <div style={{ minHeight: "100vh", display: "flex", flexDirection: "column", backgroundColor: "var(--color-bg-page)" }}>
       {/* Unified App Header */}
@@ -1115,10 +1146,20 @@ export default function VendorPosPage() {
                             </span>
                           </div>
 
-                          {/* Tier 5 Scratch PIN */}
-                          <div style={{ padding: "10px 12px", borderRadius: "var(--radius-control)", backgroundColor: "var(--color-bg-subtle)", border: "1px solid var(--color-border-default)", fontSize: "var(--text-xs)" }}>
-                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-                              <span style={{ color: "var(--color-text-main)" }}>Tier 5: Cryptographic Scratch-Off Seal PIN</span>
+                          {/* Tier 5 Scratch PIN (Collapsible for fast zero-friction checkout) */}
+                          <details
+                            style={{
+                              padding: "8px 12px",
+                              borderRadius: "var(--radius-control)",
+                              backgroundColor: "var(--color-bg-subtle)",
+                              border: "1px dashed var(--color-border-default)",
+                              fontSize: "var(--text-xs)",
+                            }}
+                          >
+                            <summary style={{ cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", outline: "none", userSelect: "none" }}>
+                              <span style={{ color: "var(--color-text-main)", fontWeight: 500 }}>
+                                Tier 5: Tamper Scratch Seal (Optional Inspection)
+                              </span>
                               <span
                                 style={{
                                   color:
@@ -1134,33 +1175,38 @@ export default function VendorPosPage() {
                                   ? "✓ Cryptographically Verified"
                                   : currentVerification.tamperSealStatus === "invalid"
                                   ? "✕ Invalid Secret PIN"
-                                  : "Optional Verification"}
+                                  : "Click to Inspect"}
                               </span>
-                            </div>
+                            </summary>
 
-                            {currentVerification.tamperSealStatus !== "verified" && (
-                              <div style={{ display: "flex", gap: "var(--space-2)", marginTop: "var(--space-2)" }}>
-                                <input
-                                  type="text"
-                                  placeholder={`Enter scratch PIN (e.g. ${currentVerification.unit?.manufacturer.slice(-4) || "1537"})`}
-                                  value={scratchSecret}
-                                  onChange={(e) => setScratchSecret(e.target.value)}
-                                  style={{
-                                    flex: 1,
-                                    backgroundColor: "var(--color-bg-surface)",
-                                    border: "1px solid var(--color-border-default)",
-                                    borderRadius: "var(--radius-control)",
-                                    padding: "6px 10px",
-                                    fontSize: "var(--text-xs)",
-                                    color: "var(--color-text-main)",
-                                  }}
-                                />
-                                <Button variant="outline" size="sm" onClick={handleVerifyTamperPin}>
-                                  Verify PIN
-                                </Button>
-                              </div>
-                            )}
-                          </div>
+                            <div style={{ marginTop: "var(--space-3)", paddingTop: "var(--space-2)", borderTop: "1px solid var(--color-border-default)" }}>
+                              <p style={{ margin: "0 0 6px", fontSize: "11px", color: "var(--color-text-muted)" }}>
+                                Standard checkout is 1-scan. For high-risk medications, optionally scratch and verify the 4-digit PIN:
+                              </p>
+                              {currentVerification.tamperSealStatus !== "verified" && (
+                                <div style={{ display: "flex", gap: "var(--space-2)" }}>
+                                  <input
+                                    type="text"
+                                    placeholder={`Enter scratch PIN (e.g. ${currentVerification.unit?.manufacturer.slice(-4) || "1537"})`}
+                                    value={scratchSecret}
+                                    onChange={(e) => setScratchSecret(e.target.value)}
+                                    style={{
+                                      flex: 1,
+                                      backgroundColor: "var(--color-bg-surface)",
+                                      border: "1px solid var(--color-border-default)",
+                                      borderRadius: "var(--radius-control)",
+                                      padding: "6px 10px",
+                                      fontSize: "var(--text-xs)",
+                                      color: "var(--color-text-main)",
+                                    }}
+                                  />
+                                  <Button variant="outline" size="sm" onClick={handleVerifyTamperPin}>
+                                    Verify PIN
+                                  </Button>
+                                </div>
+                              )}
+                            </div>
+                          </details>
                         </div>
                       </div>
 
@@ -1243,6 +1289,16 @@ export default function VendorPosPage() {
                                 Full Pack ({currentVerification.unit.quantity})
                               </Button>
                             </div>
+                          </div>
+
+                          {/* Fast Checkout Hotkey Hint */}
+                          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: "var(--space-2)", padding: "0 2px" }}>
+                            <span style={{ fontSize: "11px", color: "var(--color-text-muted)" }}>
+                              Fast Checkout Mode:
+                            </span>
+                            <span style={{ fontSize: "11px", color: "var(--color-primary)", fontWeight: 700, display: "flex", alignItems: "center", gap: "4px" }}>
+                              <Keyboard size={13} /> Press Spacebar or Enter to Sell
+                            </span>
                           </div>
 
                           {/* Submit button */}

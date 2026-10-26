@@ -121,10 +121,30 @@ flowchart TD
 | **Tier 4** | **Transit Integrity** | Contaminated or damaged batches | **REJECTED TRANSIT**: halts dispensing of compromised deliveries |
 | **Tier 5** | **Physical Scratch Seal** | Photocopies of authentic boxes | **BROKEN / FORGED SEAL**: validates single-use concealed cryptographic PIN |
 
-### 🔒 Physical Two-Factor Authentication (2FA): Scratch-Off Tamper Seals
-- **The Threat**: An authentic outer QR code can be photographed by anyone along the supply chain and cloned onto 1,000 fake packages.
-- **The Solution**: Dual-factor physical security combining *Public Data* (outer QR code) with *Concealed Secret Data* (inner cryptographic PIN underneath an opaque silver scratch-off foil).
-- **Verification**: At point of sale, the pharmacist scratches off the foil to reveal the 4-digit PIN ($\text{keccak256}(\text{id}, \text{salt})$). The terminal verifies the PIN before dispensing. If the foil is already scratched or the PIN fails, the item is immediately quarantined.
+### ⚡ Single-Key Rapid POS Checkout Mode
+- **Zero Friction**: Standard retail checkout is 1-scan with zero manual typing required.
+- **Keyboard Hotkey**: As soon as Tiers 1-4 pass (<100ms), the cashier simply presses **`Spacebar`** or **`Enter`** (or taps the button) to instantly broadcast the sale on Sepolia via the gasless relayer.
+- **Collapsible Tamper Seal**: The Tier 5 scratch PIN is placed inside a collapsible `<details>` drawer ("Advanced Tamper Inspection (Optional)") so it never obstructs or slows down standard retail lines.
+
+---
+
+## 🔍 Public Consumer Verification & Role-Adaptive QR Experience (`/verify`)
+
+The single QR code generated at packaging adapts dynamically depending on whether a consumer or an authorized handler scans it:
+
+### 1. Interactive Visual Journey Stepper (For Patients & Consumers)
+Non-technical consumers are greeted with an illustrated 4-stage supply chain journey:
+$$\text{1. Genesis Packaged} \longrightarrow \text{2. B2B Handshakes} \longrightarrow \text{3. Pharmacy POS} \longrightarrow \text{4. Patient Verification}$$
+
+- **Authentic First Scan**: If `status == Sold` and scanned for the first time at home, verifies legitimate purchase with dispensing pharmacy address, batch expiry, and dosage.
+- **🚨 Replay Rejection Warning**: If `status == Sold` and `scanCount > 1`, triggers an auditory alert siren and renders a prominent red alert card:
+  > **REJECT AS IT IS (DO NOT ACCEPT OR CONSUME)**  
+  > *This QR code was marked SOLD on-chain and has been scanned multiple times. Counterfeiters commonly clone sold stickers onto fake boxes. If you did not personally buy this from the registered pharmacy, refuse acceptance immediately.*
+
+### 2. Authorized Handler Reception Suite (For Logistics & Pharmacies)
+When an authorized handler scans an inbound shipment with their connected Web3 wallet:
+- **1-Click Accept / Reject**: Displays direct **"Accept Shipment into Custody"** and **"Reject Damaged / Tampered Shipment"** buttons with MetaMask signing.
+- **Logistics Diagnostics**: Surfaces root ancestor ID, parent container ID, dispatch timestamp, and cold-chain integrity flags.
 
 ---
 

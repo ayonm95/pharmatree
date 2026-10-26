@@ -336,7 +336,64 @@ When an item fails any tier check, the terminal locks dispensing and emits an in
 - Vendor wallet address and terminal ID (`POS-DISPENSARY-01`)
 - Browser GPS coordinates (latitude, longitude) for geospatial counterfeit tracing.
 
-## 7. Environment configuration
+### 7.6 Single-Key Rapid POS Checkout Mode
+To eliminate checkout bottlenecks, standard counter checkout operates with zero friction:
+1. **1-Scan Instant Check**: Cashier scans carton QR with barcode gun or camera.
+2. **Keyboard Hotkey**: As soon as Tiers 1-4 pass (<100ms), the cashier presses **`Spacebar`** or **`Enter`** (or taps "Confirm Sale").
+3. **Automated Gasless Broadcast**: Sells the unit on Sepolia via the relayer in the background.
+4. **Collapsible Tamper Seal**: The Tier 5 scratch PIN input is placed inside a collapsible `<details>` drawer ("Advanced Tamper Inspection (Optional)"), so it never obstructs or slows standard retail checkout.
+
+## 8. End-to-End QR Verification Lifecycle & Role-Adaptive Experience
+
+A single serialized QR code follows a continuous cryptographic lifecycle from factory floor to patient unboxing.
+
+```mermaid
+flowchart TD
+    subgraph Stage1["1. Factory Genesis"]
+        Mfr["Manufacturer Mints Unit"] --> QROuter["Print Public QR Code<br>(Unit ID, Batch, Expiry)"]
+        Mfr --> TamperFoil["Apply Concealed Scratch Foil<br>(Single-Use PIN)"]
+        QROuter & TamperFoil --> Status0["On-Chain Status: Active (0)<br>Owner: Manufacturer"]
+    end
+
+    subgraph Stage2["2. B2B Handshake Custody"]
+        Status0 --> Handshake["Initiate Transfer -> Pending (1)"]
+        Handshake --> HandlerScan{"Handler Scans QR"}
+        HandlerScan -->|Authorized Receiver| ReceptionSuite["Role-Adaptive Suite:<br>1-Click Accept / Reject"]
+        ReceptionSuite -->|Accept| Accepted["Status: Active (0)<br>Owner: Distributor/Pharmacy"]
+        ReceptionSuite -->|Reject| Rejected["Status: Rejected (3)<br>Stock Flagged & Reclaimed"]
+    end
+
+    subgraph Stage3["3. Retail POS Dispensing"]
+        Accepted --> POSScan["Pharmacist 1-Scan Check"]
+        POSScan --> Hotkey["Press Space / Enter to Sell"]
+        Hotkey --> RelayerSale["Gasless Relayer broadcasts markAsSold"]
+        RelayerSale --> Status2["On-Chain Status: Sold (2)"]
+    end
+
+    subgraph Stage4["4. Consumer Home Scan (/verify)"]
+        Status2 --> PatientScan["Patient Scans with Phone Camera"]
+        PatientScan --> ScanCounter{"Scan Telemetry Count"}
+        ScanCounter -->|Scan Count == 1| VerifiedHome["✅ LEGITIMATE PURCHASE<br>Dispensed by Pharmacy on [Date/Time]"]
+        ScanCounter -->|Scan Count > 1| ReplayHome["🚨 COUNTERFEIT REPLAY ALERT<br>Auditory Siren + 'REJECT AS IT IS' Banner"]
+        Rejected --> DangerHome["❌ DANGER: REJECTED IN TRANSIT<br>Unsafe Custody - Do Not Consume"]
+    end
+```
+
+### 8.1 Role-Adaptive Scan Interface
+When a QR code is read on `/verify`, the page detects who is scanning:
+
+1. **Consumer View (Public / Patients without Handler Wallet)**:
+   - **Interactive Visual Journey Stepper**: Displays an illustrated 4-stage progress line (`1. Genesis Packaged` -> `2. B2B Handshakes` -> `3. Pharmacy POS` -> `4. Patient Check`) with green checkmarks and timestamps.
+   - **Authentic First Scan**: If `status == Sold` and `scanCount <= 1`, verifies genuine purchase, displays dispensing pharmacy, batch details, and dosage instructions.
+   - **Duplicate / Cloned Scan**: If `status == Sold` and `scanCount > 1`, triggers an auditory alert tone and displays a prominent red warning card:
+     > **REJECT AS IT IS (DO NOT ACCEPT OR CONSUME)**  
+     > *This QR code was marked SOLD on-chain and has been scanned multiple times. If you did not personally buy this from a registered pharmacy, this packaging QR is a cloned counterfeit duplicate. Refuse acceptance immediately.*
+
+2. **Authorized Handler View (Connected Wallet with Handler/Manufacturer Role)**:
+   - **1-Click Inbound Reception Suite**: If the unit is currently in transit to the handler's wallet (`status == PendingTransfer`), displays prominent **"Accept Shipment into Custody"** and **"Reject Damaged / Tampered Shipment"** buttons with direct MetaMask signing.
+   - **Upstream Carrier Ancestry**: Displays root ancestor ID, parent container ID, batch remainder, and cold-chain integrity flags.
+
+## 9. Environment configuration
 
 Create local files from the committed templates:
 
@@ -366,7 +423,7 @@ NEXT_PUBLIC_PINATA_SECRET_API_KEY=
 Use chain ID `11155111` and the Sepolia RPC URL for Sepolia. Never commit
 `.env`, `.env.local`, private keys, API keys, or real RPC project IDs.
 
-## 8. Local development
+## 10. Local development
 
 From the repository root:
 
@@ -398,7 +455,7 @@ npm run dev
 
 Open <http://localhost:3000>.
 
-## 9. Sepolia deployment
+## 11. Sepolia deployment
 
 After filling the required values in `.env`:
 
@@ -413,7 +470,7 @@ The fresh manufacturer script deploys a new contract, assigns the manufacturer
 role, and updates the local contract address/deployment block configuration.
 Use a dedicated Sepolia test wallet with no real funds.
 
-## 10. Validation & Production Quality Assurance
+## 12. Validation & Production Quality Assurance
 
 ### Automated Testing & Linting:
 
@@ -464,13 +521,13 @@ Manual dashboard checks:
 7. Try an unauthorized receiver and an over-quantity transfer.
 8. Sell active stock and confirm it cannot be transferred afterward.
 
-## 11. Known limitations & future roadmap
+## 13. Known limitations & future roadmap
 
 - `frontend/src/lib/ipfs.ts` formats metadata locally; production decentralized pinning can be integrated with server-side Pinata/IPFS API endpoints.
 - Unit reads iterate through the contract's unit counter with cached log enrichment. In enterprise high-volume settings, an indexing subgraph (The Graph) or indexed event cache would scale querying.
 - Contract addresses and network settings are supplied through environment variables and validated against the connected MetaMask network.
 
-## 12. Security and public release
+## 14. Security and public release
 
 - Keep all secrets in ignored local environment files (`.env`, `.env.local`).
 - Use placeholder values in committed templates (`.env.example`, `.env.local.example`).
@@ -478,7 +535,7 @@ Manual dashboard checks:
 - Use a dedicated test wallet for local and Sepolia automation.
 - Rotate any credential that may have been exposed.
 
-## 13. Author and project links
+## 15. Author and project links
 
 **Ayon Moitra**
 
