@@ -1,55 +1,15 @@
 import { NextRequest, NextResponse } from "next/server";
-import fs from "fs";
-import path from "path";
 import crypto from "crypto";
 import {
-  checkRateLimit,
+  checkRateLimitAsync,
   getRateLimitHeaders,
   isValidEthAddress,
   sanitizeInputString,
 } from "@/lib/rateLimit";
-
-const DATA_DIR = path.join(process.cwd(), ".data");
-const INCIDENTS_FILE = path.join(DATA_DIR, "incidents.json");
-
-export type IncidentReport = {
-  incidentId: string;
-  unitId: string;
-  rawPayload: string;
-  tierFailed: number;
-  reason: string;
-  message: string;
-  vendorAddress?: string;
-  terminalId?: string;
-  coordinates?: { latitude: number; longitude: number };
-  notes?: string;
-  status: "QUARANTINED" | "RESOLVED" | "UNDER_REVIEW";
-  timestamp: number;
-  isoDate: string;
-};
-
-function loadIncidents(): IncidentReport[] {
-  try {
-    if (fs.existsSync(INCIDENTS_FILE)) {
-      return JSON.parse(fs.readFileSync(INCIDENTS_FILE, "utf-8"));
-    }
-  } catch (err) {
-    console.warn("Could not load incidents:", err);
-  }
-  return [];
-}
-
-function saveIncidents(list: IncidentReport[]) {
-  try {
-    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(INCIDENTS_FILE, JSON.stringify(list, null, 2), "utf-8");
-  } catch (err) {
-    console.warn("Could not save incidents:", err);
-  }
-}
+import { saveIncidentReport, getIncidentsList, DbIncidentReport } from "@/lib/db";
 
 export async function GET(req: NextRequest) {
-  const rateLimit = checkRateLimit(req, {
+  const rateLimit = await checkRateLimitAsync(req, {
     limit: 60,
     windowMs: 60 * 1000,
     prefix: "incident-get",
@@ -65,19 +25,19 @@ export async function GET(req: NextRequest) {
 
   const { searchParams } = new URL(req.url);
   const limit = Math.min(Math.max(1, Number(searchParams.get("limit") || 50)), 100);
-  const incidents = loadIncidents();
-  incidents.sort((a, b) => b.timestamp - a.timestamp);
+  const incidents = await getIncidentsList(limit);
+
   return NextResponse.json(
     {
       total: incidents.length,
-      incidents: incidents.slice(0, limit),
+      incidents,
     },
     { headers: rateHeaders }
   );
 }
 
 export async function POST(req: NextRequest) {
-  const rateLimit = checkRateLimit(req, {
+  const rateLimit = await checkRateLimitAsync(req, {
     limit: 60,
     windowMs: 60 * 1000,
     prefix: "incident-post",
@@ -135,7 +95,7 @@ export async function POST(req: NextRequest) {
 
     const incidentId = `INC-${now}-${hash}`;
 
-    const report: IncidentReport = {
+    const report: DbIncidentReport = {
       incidentId,
       unitId,
       rawPayload,
@@ -151,9 +111,7 @@ export async function POST(req: NextRequest) {
       isoDate,
     };
 
-    const incidents = loadIncidents();
-    incidents.push(report);
-    saveIncidents(incidents);
+    await saveIncidentReport(report);
 
     console.warn(
       `[POS ALERT] Counterfeit/Compromised unit quarantined: ${incidentId} (Unit #${unitId}, reason: ${reason})`

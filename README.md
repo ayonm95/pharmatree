@@ -259,11 +259,11 @@ cd backend && npx hardhat run scripts/e2e-sepolia-validation.ts --network sepoli
 - **Physical Cloning vs. Digital Uniqueness**: Anyone can photocopy a physical QR label. PharmaTree enforces that a single on-chain unit cannot be sold twice (anti-replay); however, to prevent pre-sale deception, physical packaging must incorporate tamper-evident break foils and randomized scratch seals.
 - **Public Chain Privacy**: Supply chain flow volume and custody handshakes are public on Ethereum Sepolia. For enterprise commercial confidentiality, zero-knowledge proofs (zk-SNARKs) or private consortium subnets should be used.
 
-### 2. Smart Contract Unit Test Suite
-Run the 25-scenario Chai/Mocha smart contract unit test suite:
+### 2. Comprehensive Test Suite (53 Tests Passing)
+Run the 53-scenario automated test suite spanning contract operations, mathematical supply-chain invariants, randomized property tests, GS1 Digital Link processing, and dual-scheme cryptographic seals:
 
 ```bash
-# Run smart contract unit tests from root
+# Run all unit and invariant test suites
 npm test
 
 # Run tests and validate frontend production build
@@ -271,12 +271,9 @@ npm run test:all
 ```
 
 Test coverage includes:
-- Role assignment and permission denial
-- Hierarchical unit creation and owner permissions
-- Two-party transfer handshake (initiate, accept, reject)
-- Receiver authorization verification
-- Partial unit quantity splitting (`initiatePartialTransfer`)
-- Partial dispensing (`sellQuantity`) and complete unit sale detachment
+- **`PharmaTree.test.ts` (25 tests)**: Role-based authorization, hierarchical packaging, 2-party transfer handshakes, explicit receiver rejections, partial transfer remainder conservation, and fractional dispensing.
+- **`PosInvariants.test.ts` (15 tests)**: All 8 operational supply-chain invariants, pure 5-tier evaluation engine, replay/diversion prevention, and a 35-step randomized property test asserting exact global quantity conservation ($\Sigma Q$).
+- **`Gs1AndSeals.test.ts` (13 tests)**: GTIN-14 Modulo 10 check digit validation, standard GS1 Digital Link URI generation/parsing, continuous element strings with ASCII `\x1d` separators, 2D DataMatrix SVG rendering, Scheme 0 legacy 4-digit PINs, Scheme 1 Crockford Base32 12-char HMAC-SHA256, 24-hr anti-DoS cooldown lockout, and manufacturer resets.
 
 ---
 

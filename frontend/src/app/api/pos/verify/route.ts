@@ -1,7 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { ethers } from "ethers";
-import fs from "fs";
-import path from "path";
 import {
   PHARMA_TREE_ABI,
   PHARMA_TREE_CONTRACT,
@@ -10,66 +8,20 @@ import {
 } from "@/lib/pharmaTree";
 import { readonlyProvider } from "@/lib/rpc";
 import {
-  checkRateLimit,
+  checkRateLimitAsync,
   getRateLimitHeaders,
   isValidEthAddress,
   parseSafePositiveInt,
   sanitizeInputString,
+  getClientIp,
 } from "@/lib/rateLimit";
-
-const DATA_DIR = path.join(process.cwd(), ".data");
-const SCANS_FILE = path.join(DATA_DIR, "scans.json");
-
-type ScanRecord = {
-  scanCount: number;
-  firstScanTime: number;
-  lastScanTime: number;
-};
-
-function loadScans(): Record<string, ScanRecord> {
-  try {
-    if (fs.existsSync(SCANS_FILE)) {
-      return JSON.parse(fs.readFileSync(SCANS_FILE, "utf-8"));
-    }
-  } catch (err) {
-    console.warn("Could not load scans:", err);
-  }
-  return {};
-}
-
-function recordScan(unitId: string): ScanRecord {
-  const scans = loadScans();
-  const now = Math.floor(Date.now() / 1000);
-  const existing = scans[unitId];
-
-  let record: ScanRecord;
-  if (existing) {
-    record = {
-      scanCount: existing.scanCount + 1,
-      firstScanTime: existing.firstScanTime,
-      lastScanTime: now,
-    };
-  } else {
-    record = {
-      scanCount: 1,
-      firstScanTime: now,
-      lastScanTime: now,
-    };
-  }
-
-  scans[unitId] = record;
-  try {
-    if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-    fs.writeFileSync(SCANS_FILE, JSON.stringify(scans, null, 2), "utf-8");
-  } catch (err) {
-    console.warn("Could not save scan record:", err);
-  }
-  return record;
-}
+import { recordScanAtomic, getSealRecord } from "@/lib/db";
+import { evaluateTiers } from "@/lib/tierEvaluator";
+import { verifyUnitSeal } from "@/lib/sealVerifier";
 
 export async function POST(req: NextRequest) {
   // Rate limiting: 120 verification queries/min per IP
-  const rateLimit = checkRateLimit(req, {
+  const rateLimit = await checkRateLimitAsync(req, {
     limit: 120,
     windowMs: 60 * 1000,
     prefix: "pos-verify",
@@ -106,9 +58,10 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const ip = getClientIp(req);
     const contract = new ethers.Contract(PHARMA_TREE_CONTRACT, PHARMA_TREE_ABI, readonlyProvider);
 
-    // 1. Tier 1: Check unit counter on-chain
+    // 1. Check unit counter on-chain
     let totalUnits: bigint;
     try {
       totalUnits = await contract.unitCounter();
@@ -123,14 +76,21 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Check if ID is out of bounds
     if (BigInt(unitId) > totalUnits) {
-      const scanRec = recordScan(String(unitId));
+      const scanRec = await recordScanAtomic(String(unitId), ip, "pos_terminal");
+      const evalResult = evaluateTiers({
+        unitId,
+        totalUnitsOnChain: totalUnits,
+        unit: null,
+      });
+
       return NextResponse.json(
         {
           authentic: false,
-          tierFailed: 1,
-          reason: "UNREGISTERED_ID",
-          message: `COUNTERFEIT ALERT: Unit #${unitId} does not exist in the official PharmaTree registry (total registered units: ${totalUnits.toString()}).`,
+          tierFailed: evalResult.tierFailed,
+          reason: evalResult.reason,
+          message: evalResult.message,
           scanRecord: scanRec,
         },
         { headers: rateHeaders }
@@ -139,7 +99,7 @@ export async function POST(req: NextRequest) {
 
     // 2. Fetch on-chain unit details
     const unitData = await contract.getUnitDetails(unitId);
-    const scanRec = recordScan(String(unitId));
+    const scanRec = await recordScanAtomic(String(unitId), ip, "pos_terminal");
 
     const parentId = unitData.parentId.toString();
     const rootId = unitData.rootId.toString();
@@ -154,89 +114,70 @@ export async function POST(req: NextRequest) {
     const levelName = unitLevelToName(level);
     const statusName = unitStatusToName(status);
 
-    // Tier 1 Check: Manufacturer address validation
-    if (manufacturer === ethers.ZeroAddress) {
-      return NextResponse.json(
-        {
-          authentic: false,
-          tierFailed: 1,
-          reason: "UNREGISTERED_MANUFACTURER",
-          message: "COUNTERFEIT ALERT: Unit has zero address manufacturer. Invalid genesis state.",
-          scanRecord: scanRec,
-        },
-        { headers: rateHeaders }
-      );
-    }
+    const unitObj = {
+      parentId,
+      rootId,
+      level,
+      manufacturer,
+      currentOwner,
+      pendingReceiver,
+      status,
+      quantity,
+      metadata,
+    };
 
-    // 3. Tier 2: Double-Dispensing & Replay Check (Status Sold)
-    if (status === 2) {
-      return NextResponse.json(
-        {
-          authentic: false,
-          tierFailed: 2,
-          reason: "ALREADY_SOLD_REPLAY",
-          message: `CRITICAL REPLAY WARNING: Unit #${unitId} was ALREADY SOLD and dispensed on-chain. This packaging or QR code sticker has been photocopied or reused. DO NOT DISPENSE!`,
-          unit: {
-            id: unitId,
-            levelName,
-            manufacturer,
-            currentOwner,
-            status,
-            statusName,
-            quantity,
-            metadata,
-          },
-          scanRecord: scanRec,
-        },
-        { headers: rateHeaders }
-      );
-    }
+    // 3. Scratch Seal Evaluation
+    let sealRecord = await getSealRecord(String(unitId));
+    let sealResult: any = null;
 
-    // 4. Tier 4: Transit Integrity (Status Rejected)
-    if (status === 3) {
-      return NextResponse.json(
-        {
-          authentic: false,
-          tierFailed: 4,
-          reason: "REJECTED_TRANSIT",
-          message: `CONTAMINATED / REJECTED BATCH: Unit #${unitId} was explicitly REJECTED in transit by an authorized handler. It must not be sold.`,
-          unit: {
-            id: unitId,
-            levelName,
-            manufacturer,
-            currentOwner,
-            status,
-            statusName,
-            quantity,
-            metadata,
-          },
-          scanRecord: scanRec,
-        },
-        { headers: rateHeaders }
-      );
-    }
-
-    // 5. Tier 3: Custody & Diversion Audit
-    let isOwnStock = true;
-    let diversionDetected = false;
-    if (vendorAddress && currentOwner.toLowerCase() !== vendorAddress) {
-      isOwnStock = false;
-      diversionDetected = true;
-    }
-
-    // 6. Tier 5: Cryptographic Scratch-Off / Tamper Seal Verification
-    let tamperSealStatus: "verified" | "unverified" | "invalid" = "unverified";
     if (scratchSecret) {
-      const expectedPin = manufacturer.slice(-4).toLowerCase();
-      if (
-        scratchSecret.toLowerCase() === expectedPin ||
-        scratchSecret.toLowerCase() === "pass" ||
-        scratchSecret.length >= 4
-      ) {
-        tamperSealStatus = "verified";
-      } else {
-        tamperSealStatus = "invalid";
-      }
+      sealResult = await verifyUnitSeal({
+        unitId,
+        secret: scratchSecret,
+        manufacturerAddress: manufacturer,
+      });
+      sealRecord = await getSealRecord(String(unitId));
+    }
+
+    // 4. Pure 5-Tier Evaluation
+    const evalResult = evaluateTiers({
+      unitId,
+      totalUnitsOnChain: totalUnits,
+      unit: unitObj,
+      vendorAddress,
+      scratchSecret,
+      sealRecord: sealRecord
+        ? {
+            state: sealRecord.state,
+            consumedAt: sealRecord.consumedAt,
+            failedAttempts: sealRecord.failedAttempts,
+            lockedUntil: sealRecord.lockedUntil,
+          }
+        : null,
+    });
+
+    if (!evalResult.authentic) {
+      return NextResponse.json(
+        {
+          authentic: false,
+          tierFailed: evalResult.tierFailed,
+          reason: evalResult.reason,
+          message: evalResult.message,
+          unit: {
+            id: unitId,
+            levelName,
+            manufacturer,
+            currentOwner,
+            status,
+            statusName,
+            quantity,
+            metadata,
+          },
+          scanRecord: scanRec,
+          sealResult: sealResult || undefined,
+        },
+        { headers: rateHeaders }
+      );
     }
 
     return NextResponse.json(
@@ -256,16 +197,13 @@ export async function POST(req: NextRequest) {
           quantity,
           metadata,
         },
-        tiers: {
-          tier1_registered: true,
-          tier2_unsold: status === 0,
-          tier3_custodyMatch: isOwnStock,
-          tier4_integrity: status !== 3,
-          tier5_tamperValid: tamperSealStatus === "verified",
-        },
-        diversionDetected,
-        tamperSealStatus,
+        tiers: evalResult.tiers,
+        diversionDetected: evalResult.diversionDetected,
+        tamperSealStatus: evalResult.tamperSealStatus,
+        tamperSealMessage: sealResult?.message || (sealRecord?.consumedAt ? `Seal authenticated on ${sealRecord.consumedAt}` : undefined),
+        consumedAt: sealRecord?.consumedAt || null,
         scanRecord: scanRec,
+        sealResult: sealResult || undefined,
       },
       { headers: rateHeaders }
     );

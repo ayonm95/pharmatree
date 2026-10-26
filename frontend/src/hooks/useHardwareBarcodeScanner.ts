@@ -53,6 +53,12 @@ export function useHardwareBarcodeScanner({
         return;
       }
 
+      // Handle GS1 Group Separator (ASCII 29 / 0x1D) from 2D optical barcode scanners
+      if (e.key === "GroupSeparator" || e.keyCode === 29 || e.key === "\x1d") {
+        bufferRef.current += "\x1d";
+        return;
+      }
+
       // Append printable single characters
       if (e.key.length === 1) {
         bufferRef.current += e.key;

@@ -23,16 +23,25 @@ This repository is structured as an enterprise monorepo containing distinct `bac
 | --- | --- |
 | `backend/contracts/PharmaTree.sol` | Smart contract logic: RBAC, hierarchy, ownership, transfers, partitioning, rejections, and sales |
 | `backend/scripts/` | Sepolia and local Hardhat deployment, role granting, and verification workflows |
-| `backend/scripts/agent-production-validator.ts` | Production test suite validating 8 core anti-counterfeit & dispensing invariants against Sepolia |
-| `backend/test/PharmaTree.test.ts` | Complete Chai/Mocha smart contract unit test suite (25 test cases passing) |
+| `backend/scripts/e2e-sepolia-validation.ts` | Production test suite validating 8 core anti-counterfeit & dispensing invariants against Sepolia |
+| `backend/test/PharmaTree.test.ts` | Chai/Mocha smart contract unit test suite with Hardhat snapshot fixtures (25 tests) |
+| `backend/test/PosInvariants.test.ts` | Operational supply chain invariants, randomized property tests for $\Sigma Q$ conservation, and 5-tier evaluator (15 tests) |
+| `backend/test/Gs1AndSeals.test.ts` | GS1 Digital Link standard, GTIN-14 Luhn Mod 10, DataMatrix, and dual-scheme cryptographic seal tests (13 tests) |
 | `frontend/src/app/` | Next.js 16 App Router pages (`/`, `/create`, `/admin`, `/transfers`, `/inventory`, `/verify`, `/pos`) |
+| `frontend/src/app/01/[gtin]/10/[lot]/21/[serial]/` | Standard GS1 Digital Link healthcare resolver route |
 | `frontend/src/app/pos/` | High-throughput Vendor POS QR Scanner Terminal with dual camera/HID wedge listeners |
 | `frontend/src/app/api/pos/` | POS backend endpoints: `/verify` (5-tier audit), `/sell` (gasless relayer), `/incident` (quarantine logger) |
+| `frontend/src/app/api/units/` | Fast indexed cursor-paginated projection endpoint with automated on-chain backfill |
 | `frontend/src/app/api/health/` | Production diagnostic health check endpoint (RPC latency, block height, contract status, relayer solvency) |
 | `frontend/src/app/verify/page.tsx` | Role-adaptive medicine provenance verification, 4-stage visual journey stepper & QR audit trail |
 | `frontend/src/app/error.tsx` | Route-level React 19 error boundary with diagnostics modal and retry action |
 | `frontend/src/app/global-error.tsx` | Root layout catastrophic error boundary with standalone recovery HTML |
-| `frontend/src/lib/rateLimit.ts` | Resilient in-memory sliding-window rate limiter and input sanitization suite |
+| `frontend/src/lib/db.ts` | Serverless Postgres (Neon) & local file fallback for atomic scans, incidents, units, and seals |
+| `frontend/src/lib/rateLimit.ts` | Distributed sliding-window rate limiting with Upstash Redis and fail-closed / fail-open semantics |
+| `frontend/src/lib/gs1.ts` | GS1 Digital Link builder/parser, GTIN-14 Luhn check digit, and 2D DataMatrix generator |
+| `frontend/src/lib/sealVerifier.ts` | Dual-scheme tamper seal engine (Scheme 0 legacy + Scheme 1 Crockford HMAC with 24h lockout) |
+| `frontend/src/lib/indexer.ts` | Event indexer backfilling from block 11995000 with on-chain unit detail hydration |
+| `frontend/src/lib/tierEvaluator.ts` | Pure 5-Tier Anti-Counterfeiting evaluation engine decoupled from RPC and database |
 | `frontend/src/components/PharmaWalletView.tsx` | Comprehensive reactive wallet dashboard, inventory partitions, rejection UI, and transfer controls |
 | `frontend/src/lib/audio-alerts.ts` | Zero-dependency Web Audio API synthesizer for positive chimes & emergency counterfeit sirens |
 | `frontend/src/hooks/useHardwareBarcodeScanner.ts` | Global keystroke wedge listener for USB/Bluetooth 2D barcode and QR scanner guns |
@@ -316,16 +325,18 @@ Every scanned unit is passed through a multi-tier cryptographic and state verifi
 #### The Problem: The "Digital-Physical Gap"
 A standard QR code printed on the outside of a pharmaceutical box is readable by anyone in the supply chain or retail aisle. A counterfeiter could photograph genuine QR codes and print 1,000 duplicate stickers on boxes filled with fake or adulterated medication. Digital blockchain tokens cannot independently detect an exterior photograph of paper.
 
-#### The Solution: Dual-Key Physical 2FA
-PharmaTree implements a physical two-factor anti-counterfeiting mechanism:
-1. **Public Factor (Outer Box QR)**: Contains public metadata: `Unit ID`, `Batch #`, `Expiry Date`, `Root ID`.
-2. **Concealed Secret Factor (Scratch-Off Seal)**: Beneath an opaque silver latex scratch-off coating (or tamper-evident pull-tab) lies a single-use secret PIN derived from the manufacturer's cryptographic salt:
-   $$\text{PIN} = \text{keccak256}(\text{unitId}, \text{manufacturerSecret})[0..4]$$
-
-#### Lifecycle & Usage:
-1. **Packaging**: Factory prints the outer QR and applies the scratch-off foil concealing the PIN. The cryptographic salt/hash is registered on-chain or in the manufacturer's secure registry.
-2. **Retail Checkout**: The pharmacist scans the outer QR. The terminal displays medicine details and marks `Tamper Seal: Unverified`. The pharmacist scratches the silver foil in front of the patient, enters the 4-digit PIN into the POS, and validates Tier 5.
-3. **Consumer Unboxing**: If sold sealed, the patient scratches the coating at home and verifies the PIN on `/verify`. If the foil is already scratched upon purchase, the patient immediately rejects the medicine as compromised.
+#### The Solution: Dual-Scheme Physical 2FA Tamper Seals
+PharmaTree implements a dual-scheme physical two-factor anti-counterfeiting mechanism:
+1. **Public Factor (Outer Box QR / GS1 DataMatrix)**: Contains standard public identifiers conforming to the GS1 Digital Link standard:
+   $$\text{https://pharmatree.io/01/\{GTIN\}/10/\{Batch\}/21/\{Serial\}?17=\{YYMMDD\}}$$
+2. **Concealed Secret Factor (Tamper Scratch-Off Foil)**: Beneath an opaque silver scratch-off coating lies a single-use secret verification code:
+   - **Scheme 0 (Legacy Backwards-Compatible)**: 4-digit PIN for units #1-#9 on Sepolia matching `manufacturer.slice(-4)`.
+   - **Scheme 1 (Cryptographically Hardened)**: High-entropy 12-character Crockford Base32 secret ($32^{12} \approx 1.15 \times 10^{18}$ search space, eliminating ambiguous characters $I, L, O, U$). The server registers an HMAC-SHA256 verifier salted with a private server pepper:
+     $$\text{Verifier} = \text{HMAC-SHA256}(\text{SEAL\_PEPPER}, \text{unitId} \parallel ":" \parallel \text{normalize}(\text{secret}))$$
+3. **Anti-DoS 24-Hour Cooldown Lockout**: To prevent attackers from bricking public sequential unit IDs by intentionally guessing incorrect secrets, PharmaTree imposes a temporary 24-hour cooldown lockout after 5 consecutive failed attempts (`LOCKED_REVIEW`), which can be immediately reset by the authorized manufacturer.
+4. **State Transition Lifecycle**:
+   $$\text{SEALED} \longrightarrow \text{VERIFIED} \longrightarrow \text{CONSUMED}$$
+   Once authenticated, `consumed_at` is permanently timestamped. Subsequent consumer or auditor scans display *"✓ Seal Previously Verified on [Date]"* without requiring code re-entry.
 
 ### 7.4 Gasless Relayer & Fractional Dispensing
 - **Sponsored Transactions**: Pharmacies do not need to hold or manage Sepolia ETH. The `/api/pos/sell` endpoint uses an EIP-2771 compatible sponsored relayer wallet (`RELAYER_PRIVATE_KEY`) to broadcast transactions.
@@ -451,7 +462,7 @@ npm install
 # Compile contracts in backend
 npm run compile
 
-# Run smart contract unit test suite (25 test cases)
+# Run complete automated test suite (53 test cases passing)
 npm test
 ```
 
@@ -494,7 +505,7 @@ Always use dedicated testnet wallets with non-real funds.
 ### 12.1 Automated Testing & Linting:
 
 ```bash
-# Smart contract unit tests (25 test cases passing)
+# Automated tests across 4 test suites (53 tests passing)
 npm test
 
 # Frontend code quality & types
@@ -511,7 +522,7 @@ Execute real-world on-chain invariant testing against the live Sepolia contract 
 cd backend && npx hardhat run scripts/e2e-sepolia-validation.ts --network sepolia
 ```
 
-The validation suite verifies 8 operational invariants:
+The validation suite verifies 8 operational invariants (8/8 passing):
 1. **Relayer Gas Solvency**: Verifies gas sponsorship wallet holds sufficient Sepolia ETH ($\ge 0.005$ ETH threshold).
 2. **Tier 1 (Genesis Registration)**: Validates legitimate origin of active Unit #1 under authorized manufacturer `0x6537...1537`.
 3. **Tier 1 (Forged QR Interception)**: Verifies out-of-bounds scanned unit (e.g. Unit #9999) is intercepted as `UNREGISTERED_ID` and triggers quarantine alert.

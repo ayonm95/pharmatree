@@ -1,5 +1,12 @@
 import { expect } from "chai";
 import { ethers } from "hardhat";
+import { loadFixture } from "@nomicfoundation/hardhat-network-helpers";
+import {
+  deployPharmaTreeFixture,
+  UnitLevel,
+  Status,
+} from "./fixtures/pharmaTreeFixture";
+
 describe("PharmaTree Smart Contract", function () {
   let pharmaTree: any;
   let admin: any;
@@ -8,21 +15,14 @@ describe("PharmaTree Smart Contract", function () {
   let pharmacy: any;
   let unauthorized: any;
 
-  // Enums matching Solidity definitions
-  enum UnitLevel { Container, Shipment, Batch, Box, IndividualItem }
-  enum Status { Active, PendingTransfer, Sold, Rejected }
-
   beforeEach(async function () {
-    [admin, manufacturer, distributor, pharmacy, unauthorized] = await ethers.getSigners();
-
-    const PharmaTreeFactory = await ethers.getContractFactory("PharmaTree", admin);
-    pharmaTree = await PharmaTreeFactory.deploy();
-    await pharmaTree.waitForDeployment();
-
-    // Register roles
-    await pharmaTree.connect(admin).addManufacturer(manufacturer.address);
-    await pharmaTree.connect(admin).addHandler(distributor.address);
-    await pharmaTree.connect(admin).addHandler(pharmacy.address);
+    const fixture = await loadFixture(deployPharmaTreeFixture);
+    pharmaTree = fixture.pharmaTree;
+    admin = fixture.admin;
+    manufacturer = fixture.manufacturer;
+    distributor = fixture.distributor;
+    pharmacy = fixture.pharmacy;
+    unauthorized = fixture.unauthorized;
   });
 
   describe("Admin & Role Authorization", function () {

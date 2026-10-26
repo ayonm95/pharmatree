@@ -1,4 +1,6 @@
 import { NextRequest } from "next/server";
+import { Ratelimit } from "@upstash/ratelimit";
+import { Redis } from "@upstash/redis";
 
 interface RateLimitRecord {
   timestamps: number[];
@@ -52,8 +54,76 @@ export function getClientIp(req: NextRequest): string {
   );
 }
 
+// Initialize Upstash Redis if environment credentials exist
+const upstashRatelimitMap = new Map<string, any>();
+const hasUpstash = Boolean(
+  process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN
+);
+
 /**
- * Evaluates sliding-window rate limit for a given request
+ * Evaluates rate limit using Upstash Redis (if configured) with fail-closed / fail-open semantics,
+ * or falls back to in-memory sliding-window rate limiting.
+ */
+export async function checkRateLimitAsync(
+  req: NextRequest,
+  options: RateLimitOptions = {}
+): Promise<RateLimitResult> {
+  const limit = options.limit ?? 60;
+  const prefix = options.prefix ?? "api";
+  const ip = getClientIp(req);
+
+  if (hasUpstash) {
+    try {
+      let limiter = upstashRatelimitMap.get(prefix);
+      if (!limiter) {
+        const redis = Redis.fromEnv();
+        limiter = new Ratelimit({
+          redis,
+          limiter: Ratelimit.slidingWindow(limit, "60 s"),
+          prefix: `pharma:${prefix}`,
+        });
+        upstashRatelimitMap.set(prefix, limiter);
+      }
+
+      const res = await limiter.limit(ip);
+      const resetSeconds = Math.ceil(res.reset / 1000);
+      const retryAfter = Math.max(1, Math.ceil((res.reset - Date.now()) / 1000));
+
+      return {
+        allowed: res.success,
+        limit,
+        remaining: res.remaining,
+        reset: resetSeconds,
+        retryAfter: res.success ? 0 : retryAfter,
+      };
+    } catch (err) {
+      console.warn(`[RateLimit] Upstash error on ${prefix}:`, err);
+      // Fail closed on state-changing POS sell, fail open on read-only queries
+      if (prefix === "pos-sell") {
+        return {
+          allowed: false,
+          limit,
+          remaining: 0,
+          reset: Math.ceil(Date.now() / 1000) + 60,
+          retryAfter: 60,
+        };
+      }
+      return {
+        allowed: true,
+        limit,
+        remaining: 1,
+        reset: Math.ceil(Date.now() / 1000) + 60,
+        retryAfter: 0,
+      };
+    }
+  }
+
+  // Fallback to in-memory sliding window
+  return checkRateLimit(req, options);
+}
+
+/**
+ * Synchronous in-memory sliding-window rate limit evaluator
  */
 export function checkRateLimit(
   req: NextRequest,

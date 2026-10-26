@@ -184,6 +184,59 @@ export function useChainData() {
 
   const fetchAllUnits = useCallback(async (contractInstance: ethers.Contract): Promise<UnitRecord[]> => {
     try {
+      // Fast path: Query indexed database projection endpoint
+      try {
+        const res = await fetch("/api/units?limit=100");
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && Array.isArray(data.units) && data.units.length > 0) {
+            const unitsList: UnitRecord[] = data.units.map((u: any) => ({
+              id: String(u.unitId),
+              displayId: String(u.unitId),
+              parentId: String(u.parentId),
+              rootId: String(u.rootId),
+              level: Number(u.level),
+              manufacturer: u.manufacturer,
+              currentOwner: u.currentOwner,
+              pendingReceiver: u.pendingReceiver,
+              status: Number(u.status),
+              quantity: String(u.quantity),
+              metadata: u.metadata,
+              ownerLabel: u.currentOwner,
+            }));
+
+            const childrenSeen: Record<string, number> = {};
+            const byId = new Map(unitsList.map((unit) => [unit.id, unit]));
+            for (const unit of unitsList) {
+              if (unit.parentId === "0") continue;
+              childrenSeen[unit.rootId] = (childrenSeen[unit.rootId] ?? 0) + 1;
+              const root = byId.get(unit.rootId);
+              unit.displayId = `${root?.displayId ?? unit.rootId}.${childrenSeen[unit.rootId]}`;
+            }
+
+            void fetchUnitActivity(contractInstance)
+              .then((res) => {
+                if (!res) return;
+                const { activity, historyLogs } = res;
+                if (activity && Object.keys(activity).length > 0) {
+                  setUnits((prev) =>
+                    prev.map((unit) => (activity && activity[unit.id] ? { ...unit, ...activity[unit.id] } : unit))
+                  );
+                }
+                if (historyLogs && historyLogs.length > 0) {
+                  setHistory(historyLogs);
+                }
+              })
+              .catch(() => {});
+
+            return unitsList;
+          }
+        }
+      } catch (apiErr) {
+        console.warn("Fast indexer API fetch bypassed, using direct RPC:", apiErr);
+      }
+
+      // Fallback: Direct RPC loop if API is offline
       const count = await contractInstance.unitCounter();
       const countNum = Number(count);
       if (countNum <= 0) return [];

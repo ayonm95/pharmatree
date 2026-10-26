@@ -7,6 +7,7 @@ import {
   PHARMA_TREE_ABI,
   PHARMA_TREE_CONTRACT,
 } from "@/lib/pharmaTree";
+import { parseGs1DigitalLink, parseGs1ElementString } from "@/lib/gs1";
 import {
   playBeepSuccess,
   playSirenAlarm,
@@ -71,7 +72,9 @@ type VerificationResult = {
     tier5_tamperValid: boolean;
   };
   diversionDetected?: boolean;
-  tamperSealStatus?: "verified" | "unverified" | "invalid";
+  tamperSealStatus?: "verified" | "unverified" | "invalid" | "consumed" | "locked";
+  tamperSealMessage?: string;
+  consumedAt?: string | null;
   scanRecord?: {
     scanCount: number;
     firstScanTime: number;
@@ -136,7 +139,18 @@ export default function VendorPosPage() {
       lastScannedTimeRef.current = now;
 
       let cleanId = rawCode.trim();
-      if (cleanId.includes("unitId=")) {
+
+      // Check if code is a GS1 Digital Link or GS1 Element String
+      const gs1Link = parseGs1DigitalLink(cleanId);
+      const gs1Elem = !gs1Link ? parseGs1ElementString(cleanId) : null;
+      const gs1 = gs1Link || gs1Elem;
+
+      if (gs1?.serial) {
+        const serialDigits = gs1.serial.replace(/\D/g, "");
+        if (serialDigits) {
+          cleanId = serialDigits;
+        }
+      } else if (cleanId.includes("unitId=")) {
         const match = cleanId.match(/unitId=(\d+)/);
         if (match) cleanId = match[1];
       } else if (cleanId.includes("-")) {
@@ -425,35 +439,42 @@ export default function VendorPosPage() {
   }
 
   // Verify Scratch-Off Tamper Pin
-  function handleVerifyTamperPin() {
-    if (!currentVerification?.unit) return;
-    const expected = currentVerification.unit.manufacturer.slice(-4).toLowerCase();
-    if (scratchSecret.toLowerCase() === expected || scratchSecret.toLowerCase() === "pass") {
-      if (soundEnabled) playBeepSuccess();
+  async function handleVerifyTamperPin() {
+    if (!currentVerification?.unit || !scratchSecret.trim()) return;
+    try {
+      const res = await fetch("/api/pos/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          unitId: currentVerification.unit.id,
+          scratchSecret: scratchSecret.trim(),
+          vendorAddress: activeVendorAddress,
+        }),
+      });
+      const data = await res.json();
+      if (data.tamperSealStatus === "verified" || data.tamperSealStatus === "consumed") {
+        if (soundEnabled) playBeepSuccess();
+        triggerHaptic(60);
+      } else {
+        if (soundEnabled) playSirenAlarm();
+        triggerHaptic([200, 100, 200]);
+      }
       setCurrentVerification((prev) => {
         if (!prev) return prev;
         return {
           ...prev,
-          tamperSealStatus: "verified",
+          tamperSealStatus: data.tamperSealStatus,
+          tamperSealMessage: data.tamperSealMessage,
+          consumedAt: data.consumedAt,
           tiers: {
             ...prev.tiers!,
-            tier5_tamperValid: true,
+            tier5_tamperValid:
+              data.tamperSealStatus === "verified" || data.tamperSealStatus === "consumed",
           },
         };
       });
-    } else {
-      if (soundEnabled) playSirenAlarm();
-      setCurrentVerification((prev) => {
-        if (!prev) return prev;
-        return {
-          ...prev,
-          tamperSealStatus: "invalid",
-          tiers: {
-            ...prev.tiers!,
-            tier5_tamperValid: false,
-          },
-        };
-      });
+    } catch (err) {
+      console.error("Tamper seal verification request failed:", err);
     }
   }
 
@@ -1163,9 +1184,11 @@ export default function VendorPosPage() {
                               <span
                                 style={{
                                   color:
-                                    currentVerification.tamperSealStatus === "verified"
+                                    currentVerification.tamperSealStatus === "verified" ||
+                                    currentVerification.tamperSealStatus === "consumed"
                                       ? "var(--color-success)"
-                                      : currentVerification.tamperSealStatus === "invalid"
+                                      : currentVerification.tamperSealStatus === "invalid" ||
+                                        currentVerification.tamperSealStatus === "locked"
                                       ? "var(--color-danger)"
                                       : "var(--color-text-muted)",
                                   fontWeight: 700,
@@ -1173,37 +1196,53 @@ export default function VendorPosPage() {
                               >
                                 {currentVerification.tamperSealStatus === "verified"
                                   ? "✓ Cryptographically Verified"
+                                  : currentVerification.tamperSealStatus === "consumed"
+                                  ? "✓ Seal Previously Verified"
+                                  : currentVerification.tamperSealStatus === "locked"
+                                  ? "⚠️ Locked (24h Cooldown)"
                                   : currentVerification.tamperSealStatus === "invalid"
-                                  ? "✕ Invalid Secret PIN"
+                                  ? "✕ Invalid Secret Code"
                                   : "Click to Inspect"}
                               </span>
                             </summary>
 
                             <div style={{ marginTop: "var(--space-3)", paddingTop: "var(--space-2)", borderTop: "1px solid var(--color-border-default)" }}>
-                              <p style={{ margin: "0 0 6px", fontSize: "11px", color: "var(--color-text-muted)" }}>
-                                Standard checkout is 1-scan. For high-risk medications, optionally scratch and verify the 4-digit PIN:
-                              </p>
-                              {currentVerification.tamperSealStatus !== "verified" && (
-                                <div style={{ display: "flex", gap: "var(--space-2)" }}>
-                                  <input
-                                    type="text"
-                                    placeholder={`Enter scratch PIN (e.g. ${currentVerification.unit?.manufacturer.slice(-4) || "1537"})`}
-                                    value={scratchSecret}
-                                    onChange={(e) => setScratchSecret(e.target.value)}
-                                    style={{
-                                      flex: 1,
-                                      backgroundColor: "var(--color-bg-surface)",
-                                      border: "1px solid var(--color-border-default)",
-                                      borderRadius: "var(--radius-control)",
-                                      padding: "6px 10px",
-                                      fontSize: "var(--text-xs)",
-                                      color: "var(--color-text-main)",
-                                    }}
-                                  />
-                                  <Button variant="outline" size="sm" onClick={handleVerifyTamperPin}>
-                                    Verify PIN
-                                  </Button>
-                                </div>
+                              {currentVerification.tamperSealStatus === "consumed" ? (
+                                <p style={{ margin: "0", fontSize: "11px", color: "var(--color-success)" }}>
+                                  ✓ Packaging tamper seal was already authenticated on {currentVerification.consumedAt ? new Date(currentVerification.consumedAt).toLocaleDateString() : "prior inspection"}. Stock is verified genuine.
+                                </p>
+                              ) : currentVerification.tamperSealStatus === "locked" ? (
+                                <p style={{ margin: "0", fontSize: "11px", color: "var(--color-danger)" }}>
+                                  ⚠️ Cooldown lock active due to repeated invalid guesses. Unit cannot be validated offline until lockout expires or manufacturer resets it.
+                                </p>
+                              ) : (
+                                <>
+                                  <p style={{ margin: "0 0 6px", fontSize: "11px", color: "var(--color-text-muted)" }}>
+                                    Standard checkout is 1-scan. For high-risk medications, optionally scratch and enter the 12-char Base32 code or 4-digit PIN:
+                                  </p>
+                                  {currentVerification.tamperSealStatus !== "verified" && (
+                                    <div style={{ display: "flex", gap: "var(--space-2)" }}>
+                                      <input
+                                        type="text"
+                                        placeholder={`Enter scratch secret code (or PIN: ${currentVerification.unit?.manufacturer.slice(-4) || "1537"})`}
+                                        value={scratchSecret}
+                                        onChange={(e) => setScratchSecret(e.target.value)}
+                                        style={{
+                                          flex: 1,
+                                          backgroundColor: "var(--color-bg-surface)",
+                                          border: "1px solid var(--color-border-default)",
+                                          borderRadius: "var(--radius-control)",
+                                          padding: "6px 10px",
+                                          fontSize: "var(--text-xs)",
+                                          color: "var(--color-text-main)",
+                                        }}
+                                      />
+                                      <Button variant="outline" size="sm" onClick={handleVerifyTamperPin}>
+                                        Verify Code
+                                      </Button>
+                                    </div>
+                                  )}
+                                </>
                               )}
                             </div>
                           </details>

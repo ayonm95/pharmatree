@@ -47,9 +47,16 @@ lerna-debug.log*
 
 # Testing & Coverage
 coverage/
+backend/coverage/
+coverage.json
+backend/coverage.json
 .nyc_output/
 
-# Temporary directories
+# Temporary & Local Data directories
+.data/
+*.data/
+backend/.data/
+frontend/.data/
 .turbo/
 .playwright-mcp/
 report/
