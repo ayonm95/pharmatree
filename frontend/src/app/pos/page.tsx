@@ -26,12 +26,10 @@ import { formatAddress } from "@/lib/format";
 import {
   Scan,
   ShieldAlert,
-  ShieldCheck,
   AlertTriangle,
   CheckCircle2,
   XCircle,
   Pill,
-  RotateCcw,
   Zap,
   Volume2,
   VolumeX,
@@ -44,7 +42,6 @@ import {
   Wallet,
   Plus,
   AlertOctagon,
-  FileWarning,
 } from "lucide-react";
 
 type VerificationResult = {

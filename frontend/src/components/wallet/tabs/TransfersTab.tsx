@@ -43,7 +43,8 @@ export function TransfersTab({
   onSelectUnitDetail,
 }: TransfersTabProps) {
   const lowerAccount = account.toLowerCase();
-  const canTransact = Boolean(account) && (role.manufacturer || role.handler);
+  const isManufacturer = role.manufacturer;
+  const canTransact = Boolean(account) && (isManufacturer || role.handler);
 
   const visibleHistory = useMemo(() => {
     // Collect all units that reached a resolved transfer state
@@ -78,7 +79,7 @@ export function TransfersTab({
       if (isDirectlyInvolved) return true;
 
       // Manufacturer can inspect activity for their manufactured batches
-      if (role.manufacturer) {
+      if (isManufacturer) {
         const unit = units.find((u) => u.id === entry.id);
         if (unit && unit.manufacturer.toLowerCase() === lowerAccount) {
           return true;
@@ -87,7 +88,7 @@ export function TransfersTab({
 
       return false;
     });
-  }, [history, isAdmin, lowerAccount, role.manufacturer, units]);
+  }, [history, isAdmin, lowerAccount, isManufacturer, units]);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-6)" }} className="fade-in">

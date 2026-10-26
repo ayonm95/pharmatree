@@ -86,7 +86,7 @@ export async function POST(req: NextRequest) {
     let totalUnits: bigint;
     try {
       totalUnits = await contract.unitCounter();
-    } catch (rpcErr: any) {
+    } catch {
       return NextResponse.json(
         {
           authentic: false,
