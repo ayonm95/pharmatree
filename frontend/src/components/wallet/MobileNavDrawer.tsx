@@ -9,6 +9,7 @@ import {
   ShieldCheck,
   ArrowLeftRight,
   Package,
+  Scan,
 } from "lucide-react";
 
 interface MobileNavDrawerProps {
@@ -51,6 +52,7 @@ export function MobileNavDrawer({
     { key: "admin", label: "Admin", href: "/admin", icon: ShieldCheck },
     { key: "transfers", label: "Transfers", href: "/transfers", icon: ArrowLeftRight },
     { key: "inventory", label: "Inventory", href: "/inventory", icon: Package },
+    { key: "pos", label: "POS Scanner", href: "/pos", icon: Scan },
   ];
 
   return (

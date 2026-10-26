@@ -8,10 +8,11 @@ import {
   ShieldCheck,
   ArrowLeftRight,
   Package,
+  Scan,
 } from "lucide-react";
 
 export interface NavItem {
-  key: "overview" | "create" | "admin" | "transfers" | "inventory";
+  key: "overview" | "create" | "admin" | "transfers" | "inventory" | "pos";
   label: string;
   href: string;
   icon: React.ComponentType<{ size?: number; "aria-hidden"?: boolean | "true" | "false" }>;
@@ -33,6 +34,7 @@ export function Sidebar({ activeMode, canCreateUnit }: SidebarProps) {
     { key: "admin", label: "Admin", href: "/admin", icon: ShieldCheck },
     { key: "transfers", label: "Transfers", href: "/transfers", icon: ArrowLeftRight },
     { key: "inventory", label: "Inventory", href: "/inventory", icon: Package },
+    { key: "pos", label: "POS Scanner", href: "/pos", icon: Scan },
   ];
 
   return (

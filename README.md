@@ -3,7 +3,7 @@
 
 [![Solidity](https://img.shields.io/badge/Solidity-0.8.20-blue?logo=solidity)](https://soliditylang.org/)
 [![Ethereum](https://img.shields.io/badge/Ethereum-Sepolia%20Testnet-627EEA?logo=ethereum)](https://sepolia.etherscan.io/)
-[![Next.js](https://img.shields.io/badge/Next.js-16.3-black?logo=next.js)](https://nextjs.org/)
+[![Next.js](https://img.shields.io/badge/Next.js-16.4.3-black?logo=next.js)](https://nextjs.org/)
 [![Ethers.js](https://img.shields.io/badge/Ethers.js-v6-purple)](https://docs.ethers.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -18,6 +18,7 @@ PharmaTree is an enterprise-grade decentralized pharmaceutical supply chain trac
   $$\text{Container} \longrightarrow \text{Shipment} \longrightarrow \text{Batch} \longrightarrow \text{Box} \longrightarrow \text{Individual Item}$$
 - **Two-Party Custody Handshake & Explicit Rejection Flow**: Prevents inventory interception or unilateral dumping. Inbound shipments require explicit mutual acceptance by the authorized recipient. Receivers can reject suspicious or damaged shipments, automatically returning stock to the sender's inventory while recording a transparent on-chain audit trail (`Rejected by 0x...`).
 - **Inventory Partitioning & Detachment**: Supports partial transfers (`initiatePartialTransfer`) and partial retail dispensing (`sellQuantity`), preserving sender remainder while detaching new child units.
+- **Vendor POS QR Scanner Terminal (`/pos`)**: High-throughput kiosk scanner for dispensaries, pharmacies, and end vendors. Supports live camera viewfinder and USB/Bluetooth hardware barcode guns (keyboard-wedge). Features a **5-Tier Anti-Counterfeit Interception Engine** (Genesis registration, Anti-replay double-dispensing block, Anti-diversion custody check, Transit integrity inspection, and Cryptographic scratch-off seal verification), instant gasless on-chain sales via relayer sponsor, and synthesized Web Audio sirens and chimes.
 - **Consumer Verification & QR Audit Trail**: Dedicated public verification portal (`/verify`) allowing anyone to scan a QR code or search a Unit ID to inspect the full chronological chain of custody without needing a crypto wallet.
 - **Resilient Multi-Endpoint Fallback RPC**: Built-in RPC failover engine (`rpc.ts`) with exponential backoff and rate-limit recovery across public Sepolia providers.
 - **Real-Time Next.js 16 Web Dashboard**: Responsive UI with automated MetaMask account detection, reactive donut stock charts, and dynamic role panels.
