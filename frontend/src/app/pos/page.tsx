@@ -43,6 +43,7 @@ import {
   Wallet,
   Plus,
   AlertOctagon,
+  RotateCcw,
 } from "lucide-react";
 
 type VerificationResult = {
@@ -50,6 +51,7 @@ type VerificationResult = {
   tierFailed?: number;
   reason?: string;
   message?: string;
+  error?: string;
   unit?: {
     id: number;
     parentId?: string;
@@ -185,7 +187,20 @@ export default function VendorPosPage() {
         const data: VerificationResult = await res.json();
         setCurrentVerification(data);
 
-        if (data.authentic && data.tiers?.tier2_unsold && !data.diversionDetected) {
+        if (!res.ok || data.error) {
+          if (soundEnabled) playClickSound();
+          setScanHistory((prev) => [
+            {
+              id: `${now}-${numId}`,
+              unitId: numId,
+              type: "COUNTERFEIT",
+              title: `SYSTEM NOTICE: ${data.error || "CONNECTION_FAILED"}`,
+              timestamp: now,
+              details: data.message || `System error verifying Unit #${numId}. Please retry.`,
+            },
+            ...prev.slice(0, 19),
+          ]);
+        } else if (data.authentic && data.tiers?.tier2_unsold && !data.diversionDetected) {
           if (soundEnabled) playBeepSuccess();
           triggerHaptic(60);
 
@@ -222,7 +237,12 @@ export default function VendorPosPage() {
         }
       } catch (err: any) {
         console.error("Verification failed:", err);
-        if (soundEnabled) playSirenAlarm();
+        if (soundEnabled) playClickSound();
+        setCurrentVerification({
+          authentic: false,
+          error: "NETWORK_ERROR",
+          message: err.message || "Failed to reach verification endpoint. Please check your internet connection.",
+        });
       } finally {
         setIsVerifying(false);
       }
@@ -479,11 +499,12 @@ export default function VendorPosPage() {
   }
 
   const isCounterfeitOrBad =
-    currentVerification &&
-    (!currentVerification.authentic ||
-      !currentVerification.tiers?.tier2_unsold ||
-      currentVerification.diversionDetected ||
-      currentVerification.tiers?.tier4_integrity === false);
+    Boolean(currentVerification) &&
+    !currentVerification?.error &&
+    (!currentVerification?.authentic ||
+      !currentVerification?.tiers?.tier2_unsold ||
+      currentVerification?.diversionDetected ||
+      currentVerification?.tiers?.tier4_integrity === false);
 
   const canCreate = Boolean(account) && (role.manufacturer || isAdmin);
 
@@ -893,9 +914,19 @@ export default function VendorPosPage() {
                       type="button"
                       onClick={() => processScannedCode("8")}
                       style={{
-                        backgroundColor: "var(--color-warning-bg)",
-                        color: "var(--color-warning-fg)",
-                        border: "1px solid var(--color-warning-border)",
+                        backgroundColor:
+                          activeVendorAddress.toLowerCase() === "0xe88a5608b536bcc9d557823234baca9a00f2540b"
+                            ? "var(--color-success-bg)"
+                            : "var(--color-warning-bg)",
+                        color:
+                          activeVendorAddress.toLowerCase() === "0xe88a5608b536bcc9d557823234baca9a00f2540b"
+                            ? "var(--color-success-fg)"
+                            : "var(--color-warning-fg)",
+                        border: `1px solid ${
+                          activeVendorAddress.toLowerCase() === "0xe88a5608b536bcc9d557823234baca9a00f2540b"
+                            ? "var(--color-success-border)"
+                            : "var(--color-warning-border)"
+                        }`,
                         borderRadius: "var(--radius-control)",
                         padding: "6px 10px",
                         fontSize: "var(--text-xs)",
@@ -903,7 +934,9 @@ export default function VendorPosPage() {
                         cursor: "pointer",
                       }}
                     >
-                      ⚠ Unit #8 (Diverted Stock)
+                      {activeVendorAddress.toLowerCase() === "0xe88a5608b536bcc9d557823234baca9a00f2540b"
+                        ? "✓ Unit #8 (Your In-Stock Inventory)"
+                        : "⚠ Unit #8 (Custody 0xe88 / Diverted for others)"}
                     </button>
                     <button
                       type="button"
@@ -951,6 +984,81 @@ export default function VendorPosPage() {
                 </Card>
               ) : currentVerification ? (
                 <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-4)" }}>
+                  {/* SYSTEM / NETWORK ISSUE NOTICE */}
+                  {currentVerification.error && (
+                    <div
+                      style={{
+                        backgroundColor: "var(--color-warning-bg)",
+                        border: "2px solid var(--color-warning-border)",
+                        borderRadius: "var(--radius-surface)",
+                        padding: "var(--space-6)",
+                        boxShadow: "var(--shadow-md)",
+                      }}
+                    >
+                      <div style={{ display: "flex", alignItems: "flex-start", gap: "var(--space-4)" }}>
+                        <div
+                          style={{
+                            width: "44px",
+                            height: "44px",
+                            borderRadius: "var(--radius-control)",
+                            backgroundColor: "var(--color-warning)",
+                            color: "#fff",
+                            display: "flex",
+                            alignItems: "center",
+                            justifyContent: "center",
+                            flexShrink: 0,
+                          }}
+                        >
+                          <AlertTriangle size={26} />
+                        </div>
+                        <div style={{ flex: 1 }}>
+                          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)", flexWrap: "wrap" }}>
+                            <span
+                              style={{
+                                backgroundColor: "var(--color-warning)",
+                                color: "#fff",
+                                fontSize: "var(--text-xs)",
+                                fontWeight: 800,
+                                padding: "2px 8px",
+                                borderRadius: "var(--radius-pill)",
+                                textTransform: "uppercase",
+                                letterSpacing: "0.05em",
+                              }}
+                            >
+                              System Notice
+                            </span>
+                            <span style={{ fontSize: "var(--text-xs)", color: "var(--color-warning-fg)", fontWeight: 700 }}>
+                              {currentVerification.error}
+                            </span>
+                          </div>
+                          <h3 style={{ margin: "var(--space-2) 0 var(--space-1)", fontSize: "var(--text-lg)", fontWeight: 700, color: "var(--color-text-main)" }}>
+                            Verification Incomplete (Network / Server Notice)
+                          </h3>
+                          <p style={{ margin: "0 0 var(--space-4)", fontSize: "var(--text-sm)", color: "var(--color-text-muted)", lineHeight: 1.5 }}>
+                            {currentVerification.message}
+                          </p>
+
+                          <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)", flexWrap: "wrap" }}>
+                            <Button
+                              variant="secondary"
+                              size="sm"
+                              onClick={() => {
+                                const idToRetry = scannedUnitId || currentVerification?.unit?.id;
+                                if (idToRetry) processScannedCode(String(idToRetry));
+                              }}
+                              icon={<RotateCcw size={16} />}
+                            >
+                              Retry Verification
+                            </Button>
+                            <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
+                              Note: The medicine itself has not failed audit. Please retry to confirm status.
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
                   {/* CRITICAL COUNTERFEIT EMERGENCY ALERT */}
                   {isCounterfeitOrBad && (
                     <div
@@ -1037,7 +1145,11 @@ export default function VendorPosPage() {
                       style={{
                         padding: "var(--space-4) var(--space-6)",
                         borderBottom: "1px solid var(--color-border-default)",
-                        backgroundColor: isCounterfeitOrBad ? "var(--color-danger-bg)" : "var(--color-success-bg)",
+                        backgroundColor: currentVerification.error
+                          ? "var(--color-warning-bg)"
+                          : isCounterfeitOrBad
+                          ? "var(--color-danger-bg)"
+                          : "var(--color-success-bg)",
                         display: "flex",
                         alignItems: "center",
                         justifyContent: "space-between",
@@ -1046,7 +1158,9 @@ export default function VendorPosPage() {
                       }}
                     >
                       <div style={{ display: "flex", alignItems: "center", gap: "var(--space-3)" }}>
-                        {isCounterfeitOrBad ? (
+                        {currentVerification.error ? (
+                          <AlertTriangle size={22} color="var(--color-warning)" />
+                        ) : isCounterfeitOrBad ? (
                           <XCircle size={22} color="var(--color-danger)" />
                         ) : (
                           <CheckCircle2 size={22} color="var(--color-success)" />
@@ -1055,8 +1169,22 @@ export default function VendorPosPage() {
                           <h3 style={{ margin: 0, fontSize: "var(--text-base)", fontWeight: 700, color: "var(--color-text-main)" }}>
                             Unit #{currentVerification.unit?.id || scannedUnitId}
                           </h3>
-                          <span style={{ fontSize: "var(--text-xs)", color: isCounterfeitOrBad ? "var(--color-danger-fg)" : "var(--color-success-fg)", fontWeight: 600 }}>
-                            {isCounterfeitOrBad ? "Integrity Audit Failed" : "Authentic & Verified on Sepolia"}
+                          <span
+                            style={{
+                              fontSize: "var(--text-xs)",
+                              color: currentVerification.error
+                                ? "var(--color-warning-fg)"
+                                : isCounterfeitOrBad
+                                ? "var(--color-danger-fg)"
+                                : "var(--color-success-fg)",
+                              fontWeight: 600,
+                            }}
+                          >
+                            {currentVerification.error
+                              ? "Verification Status Incomplete"
+                              : isCounterfeitOrBad
+                              ? "Integrity Audit Failed"
+                              : "Authentic & Verified on Sepolia"}
                           </span>
                         </div>
                       </div>
@@ -1134,120 +1262,122 @@ export default function VendorPosPage() {
                       )}
 
                       {/* 5-Tier Audit Checklist */}
-                      <div style={{ marginBottom: "var(--space-6)" }}>
-                        <h5 style={{ margin: "0 0 var(--space-3)", fontSize: "var(--text-xs)", color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 700 }}>
-                          Anti-Counterfeiting 5-Tier Audit Checklist
-                        </h5>
-                        <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
-                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", borderRadius: "var(--radius-control)", backgroundColor: "var(--color-bg-subtle)", border: "1px solid var(--color-border-default)", fontSize: "var(--text-xs)" }}>
-                            <span style={{ color: "var(--color-text-main)" }}>Tier 1: On-Chain Genesis Registration</span>
-                            <span style={{ color: currentVerification.tiers?.tier1_registered ? "var(--color-success)" : "var(--color-danger)", fontWeight: 700 }}>
-                              {currentVerification.tiers?.tier1_registered ? "✓ Valid Unit ID" : "✕ Unregistered ID"}
-                            </span>
-                          </div>
-
-                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", borderRadius: "var(--radius-control)", backgroundColor: "var(--color-bg-subtle)", border: "1px solid var(--color-border-default)", fontSize: "var(--text-xs)" }}>
-                            <span style={{ color: "var(--color-text-main)" }}>Tier 2: Anti-Replay &amp; Double-Dispensing Lock</span>
-                            <span style={{ color: currentVerification.tiers?.tier2_unsold ? "var(--color-success)" : "var(--color-danger)", fontWeight: 700 }}>
-                              {currentVerification.tiers?.tier2_unsold ? "✓ Unsold & Active" : "✕ Already Sold (Replay Attack)"}
-                            </span>
-                          </div>
-
-                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", borderRadius: "var(--radius-control)", backgroundColor: "var(--color-bg-subtle)", border: "1px solid var(--color-border-default)", fontSize: "var(--text-xs)" }}>
-                            <span style={{ color: "var(--color-text-main)" }}>Tier 3: Handshake Custody &amp; Anti-Diversion</span>
-                            <span style={{ color: !currentVerification.diversionDetected ? "var(--color-success)" : "var(--color-warning)", fontWeight: 700 }}>
-                              {!currentVerification.diversionDetected ? "✓ Authorized Dispensary Stock" : "⚠ Diverted Stock (Owner Mismatch)"}
-                            </span>
-                          </div>
-
-                          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", borderRadius: "var(--radius-control)", backgroundColor: "var(--color-bg-subtle)", border: "1px solid var(--color-border-default)", fontSize: "var(--text-xs)" }}>
-                            <span style={{ color: "var(--color-text-main)" }}>Tier 4: Transit Integrity &amp; Contamination</span>
-                            <span style={{ color: currentVerification.tiers?.tier4_integrity ? "var(--color-success)" : "var(--color-danger)", fontWeight: 700 }}>
-                              {currentVerification.tiers?.tier4_integrity ? "✓ Verified Transit Handshake" : "✕ Rejected / Recalled Stock"}
-                            </span>
-                          </div>
-
-                          {/* Tier 5 Scratch PIN (Collapsible for fast zero-friction checkout) */}
-                          <details
-                            style={{
-                              padding: "8px 12px",
-                              borderRadius: "var(--radius-control)",
-                              backgroundColor: "var(--color-bg-subtle)",
-                              border: "1px dashed var(--color-border-default)",
-                              fontSize: "var(--text-xs)",
-                            }}
-                          >
-                            <summary style={{ cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", outline: "none", userSelect: "none" }}>
-                              <span style={{ color: "var(--color-text-main)", fontWeight: 500 }}>
-                                Tier 5: Tamper Scratch Seal (Optional Inspection)
+                      {currentVerification.tiers && (
+                        <div style={{ marginBottom: "var(--space-6)" }}>
+                          <h5 style={{ margin: "0 0 var(--space-3)", fontSize: "var(--text-xs)", color: "var(--color-text-muted)", textTransform: "uppercase", letterSpacing: "0.05em", fontWeight: 700 }}>
+                            Anti-Counterfeiting 5-Tier Audit Checklist
+                          </h5>
+                          <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-2)" }}>
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", borderRadius: "var(--radius-control)", backgroundColor: "var(--color-bg-subtle)", border: "1px solid var(--color-border-default)", fontSize: "var(--text-xs)" }}>
+                              <span style={{ color: "var(--color-text-main)" }}>Tier 1: On-Chain Genesis Registration</span>
+                              <span style={{ color: currentVerification.tiers.tier1_registered ? "var(--color-success)" : "var(--color-danger)", fontWeight: 700 }}>
+                                {currentVerification.tiers.tier1_registered ? "✓ Valid Unit ID" : "✕ Unregistered ID"}
                               </span>
-                              <span
-                                style={{
-                                  color:
-                                    currentVerification.tamperSealStatus === "verified" ||
-                                    currentVerification.tamperSealStatus === "consumed"
-                                      ? "var(--color-success)"
-                                      : currentVerification.tamperSealStatus === "invalid" ||
-                                        currentVerification.tamperSealStatus === "locked"
-                                      ? "var(--color-danger)"
-                                      : "var(--color-text-muted)",
-                                  fontWeight: 700,
-                                }}
-                              >
-                                {currentVerification.tamperSealStatus === "verified"
-                                  ? "✓ Cryptographically Verified"
-                                  : currentVerification.tamperSealStatus === "consumed"
-                                  ? "✓ Seal Previously Verified"
-                                  : currentVerification.tamperSealStatus === "locked"
-                                  ? "⚠️ Locked (24h Cooldown)"
-                                  : currentVerification.tamperSealStatus === "invalid"
-                                  ? "✕ Invalid Secret Code"
-                                  : "Click to Inspect"}
-                              </span>
-                            </summary>
-
-                            <div style={{ marginTop: "var(--space-3)", paddingTop: "var(--space-2)", borderTop: "1px solid var(--color-border-default)" }}>
-                              {currentVerification.tamperSealStatus === "consumed" ? (
-                                <p style={{ margin: "0", fontSize: "11px", color: "var(--color-success)" }}>
-                                  ✓ Packaging tamper seal was already authenticated on {currentVerification.consumedAt ? new Date(currentVerification.consumedAt).toLocaleDateString() : "prior inspection"}. Stock is verified genuine.
-                                </p>
-                              ) : currentVerification.tamperSealStatus === "locked" ? (
-                                <p style={{ margin: "0", fontSize: "11px", color: "var(--color-danger)" }}>
-                                  ⚠️ Cooldown lock active due to repeated invalid guesses. Unit cannot be validated offline until lockout expires or manufacturer resets it.
-                                </p>
-                              ) : (
-                                <>
-                                  <p style={{ margin: "0 0 6px", fontSize: "11px", color: "var(--color-text-muted)" }}>
-                                    Standard checkout is 1-scan. For high-risk medications, optionally scratch and enter the 12-char Base32 code or 4-digit PIN:
-                                  </p>
-                                  {currentVerification.tamperSealStatus !== "verified" && (
-                                    <div style={{ display: "flex", gap: "var(--space-2)" }}>
-                                      <input
-                                        type="text"
-                                        placeholder={`Enter scratch secret code (or PIN: ${currentVerification.unit?.manufacturer.slice(-4) || "1537"})`}
-                                        value={scratchSecret}
-                                        onChange={(e) => setScratchSecret(e.target.value)}
-                                        style={{
-                                          flex: 1,
-                                          backgroundColor: "var(--color-bg-surface)",
-                                          border: "1px solid var(--color-border-default)",
-                                          borderRadius: "var(--radius-control)",
-                                          padding: "6px 10px",
-                                          fontSize: "var(--text-xs)",
-                                          color: "var(--color-text-main)",
-                                        }}
-                                      />
-                                      <Button variant="outline" size="sm" onClick={handleVerifyTamperPin}>
-                                        Verify Code
-                                      </Button>
-                                    </div>
-                                  )}
-                                </>
-                              )}
                             </div>
-                          </details>
+
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", borderRadius: "var(--radius-control)", backgroundColor: "var(--color-bg-subtle)", border: "1px solid var(--color-border-default)", fontSize: "var(--text-xs)" }}>
+                              <span style={{ color: "var(--color-text-main)" }}>Tier 2: Anti-Replay &amp; Double-Dispensing Lock</span>
+                              <span style={{ color: currentVerification.tiers.tier2_unsold ? "var(--color-success)" : "var(--color-danger)", fontWeight: 700 }}>
+                                {currentVerification.tiers.tier2_unsold ? "✓ Unsold & Active" : "✕ Already Sold (Replay Attack)"}
+                              </span>
+                            </div>
+
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", borderRadius: "var(--radius-control)", backgroundColor: "var(--color-bg-subtle)", border: "1px solid var(--color-border-default)", fontSize: "var(--text-xs)" }}>
+                              <span style={{ color: "var(--color-text-main)" }}>Tier 3: Handshake Custody &amp; Anti-Diversion</span>
+                              <span style={{ color: !currentVerification.diversionDetected ? "var(--color-success)" : "var(--color-warning)", fontWeight: 700 }}>
+                                {!currentVerification.diversionDetected ? "✓ Authorized Dispensary Stock" : "⚠ Diverted Stock (Owner Mismatch)"}
+                              </span>
+                            </div>
+
+                            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", padding: "8px 12px", borderRadius: "var(--radius-control)", backgroundColor: "var(--color-bg-subtle)", border: "1px solid var(--color-border-default)", fontSize: "var(--text-xs)" }}>
+                              <span style={{ color: "var(--color-text-main)" }}>Tier 4: Transit Integrity &amp; Contamination</span>
+                              <span style={{ color: currentVerification.tiers.tier4_integrity ? "var(--color-success)" : "var(--color-danger)", fontWeight: 700 }}>
+                                {currentVerification.tiers.tier4_integrity ? "✓ Verified Transit Handshake" : "✕ Rejected / Recalled Stock"}
+                              </span>
+                            </div>
+
+                            {/* Tier 5 Scratch PIN (Collapsible for fast zero-friction checkout) */}
+                            <details
+                              style={{
+                                padding: "8px 12px",
+                                borderRadius: "var(--radius-control)",
+                                backgroundColor: "var(--color-bg-subtle)",
+                                border: "1px dashed var(--color-border-default)",
+                                fontSize: "var(--text-xs)",
+                              }}
+                            >
+                              <summary style={{ cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "space-between", outline: "none", userSelect: "none" }}>
+                                <span style={{ color: "var(--color-text-main)", fontWeight: 500 }}>
+                                  Tier 5: Tamper Scratch Seal (Optional Inspection)
+                                </span>
+                                <span
+                                  style={{
+                                    color:
+                                      currentVerification.tamperSealStatus === "verified" ||
+                                      currentVerification.tamperSealStatus === "consumed"
+                                        ? "var(--color-success)"
+                                        : currentVerification.tamperSealStatus === "invalid" ||
+                                          currentVerification.tamperSealStatus === "locked"
+                                        ? "var(--color-danger)"
+                                        : "var(--color-text-muted)",
+                                    fontWeight: 700,
+                                  }}
+                                >
+                                  {currentVerification.tamperSealStatus === "verified"
+                                    ? "✓ Cryptographically Verified"
+                                    : currentVerification.tamperSealStatus === "consumed"
+                                    ? "✓ Seal Previously Verified"
+                                    : currentVerification.tamperSealStatus === "locked"
+                                    ? "⚠️ Locked (24h Cooldown)"
+                                    : currentVerification.tamperSealStatus === "invalid"
+                                    ? "✕ Invalid Secret Code"
+                                    : "Click to Inspect"}
+                                </span>
+                              </summary>
+
+                              <div style={{ marginTop: "var(--space-3)", paddingTop: "var(--space-2)", borderTop: "1px solid var(--color-border-default)" }}>
+                                {currentVerification.tamperSealStatus === "consumed" ? (
+                                  <p style={{ margin: "0", fontSize: "11px", color: "var(--color-success)" }}>
+                                    ✓ Packaging tamper seal was already authenticated on {currentVerification.consumedAt ? new Date(currentVerification.consumedAt).toLocaleDateString() : "prior inspection"}. Stock is verified genuine.
+                                  </p>
+                                ) : currentVerification.tamperSealStatus === "locked" ? (
+                                  <p style={{ margin: "0", fontSize: "11px", color: "var(--color-danger)" }}>
+                                    ⚠️ Cooldown lock active due to repeated invalid guesses. Unit cannot be validated offline until lockout expires or manufacturer resets it.
+                                  </p>
+                                ) : (
+                                  <>
+                                    <p style={{ margin: "0 0 6px", fontSize: "11px", color: "var(--color-text-muted)" }}>
+                                      Standard checkout is 1-scan. For high-risk medications, optionally scratch and enter the 12-char Base32 code or 4-digit PIN:
+                                    </p>
+                                    {currentVerification.tamperSealStatus !== "verified" && (
+                                      <div style={{ display: "flex", gap: "var(--space-2)" }}>
+                                        <input
+                                          type="text"
+                                          placeholder={`Enter scratch secret code (or PIN: ${currentVerification.unit?.manufacturer.slice(-4) || "1537"})`}
+                                          value={scratchSecret}
+                                          onChange={(e) => setScratchSecret(e.target.value)}
+                                          style={{
+                                            flex: 1,
+                                            backgroundColor: "var(--color-bg-surface)",
+                                            border: "1px solid var(--color-border-default)",
+                                            borderRadius: "var(--radius-control)",
+                                            padding: "6px 10px",
+                                            fontSize: "var(--text-xs)",
+                                            color: "var(--color-text-main)",
+                                          }}
+                                        />
+                                        <Button variant="outline" size="sm" onClick={handleVerifyTamperPin}>
+                                          Verify Code
+                                        </Button>
+                                      </div>
+                                    )}
+                                  </>
+                                )}
+                              </div>
+                            </details>
+                          </div>
                         </div>
-                      </div>
+                      )}
 
                       {/* DISPENSING / SALE SECTION (Active Only) */}
                       {!isCounterfeitOrBad && currentVerification.unit && (

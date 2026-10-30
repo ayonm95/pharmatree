@@ -15,19 +15,89 @@ if (DATABASE_URL) {
   }
 }
 
-// Local fallback file paths
-const DATA_DIR = path.join(process.cwd(), ".data");
-const SCANS_FILE = path.join(DATA_DIR, "scans.json");
-const INCIDENTS_FILE = path.join(DATA_DIR, "incidents.json");
-const UNITS_FILE = path.join(DATA_DIR, "units.json");
-const UNIT_EVENTS_FILE = path.join(DATA_DIR, "unit_events.json");
-const INDEXER_STATE_FILE = path.join(DATA_DIR, "indexer_state.json");
-const SEALS_FILE = path.join(DATA_DIR, "seals.json");
+// In-memory cache structures to guarantee non-throwing zero-fail operation on read-only serverless runtimes
+const inMemoryScans: Record<string, any> = {};
+const inMemoryIncidents: DbIncidentReport[] = [];
+const inMemoryUnits: Record<string, DbUnitRecord> = {};
+const inMemoryUnitEvents: DbUnitEvent[] = [];
+const inMemoryIndexerState: Record<string, any> = {};
+const inMemorySeals: Record<string, DbSealRecord> = {};
 
-// Ensure local directory exists
-function ensureDataDir() {
-  if (!fs.existsSync(DATA_DIR)) {
-    fs.mkdirSync(DATA_DIR, { recursive: true });
+/**
+ * Determine a safe, writable directory.
+ * On serverless platforms (Vercel, AWS Lambda, Netlify), process.cwd() is read-only.
+ * /tmp is the only guaranteed writable directory in serverless containers.
+ */
+function getWritableDataDir(): string {
+  if (
+    process.env.VERCEL ||
+    process.env.AWS_LAMBDA_FUNCTION_NAME ||
+    process.cwd().startsWith("/var/task")
+  ) {
+    return path.join("/tmp", ".pharmatree-data");
+  }
+  return path.join(process.cwd(), ".data");
+}
+
+let cachedDataDir: string | null = null;
+
+function ensureDataDir(): string {
+  if (cachedDataDir) {
+    try {
+      if (!fs.existsSync(cachedDataDir)) {
+        fs.mkdirSync(cachedDataDir, { recursive: true });
+      }
+      return cachedDataDir;
+    } catch {
+      // Re-detect below
+    }
+  }
+
+  const primary = getWritableDataDir();
+  try {
+    if (!fs.existsSync(primary)) {
+      fs.mkdirSync(primary, { recursive: true });
+    }
+    cachedDataDir = primary;
+    return primary;
+  } catch (err) {
+    // If primary failed (e.g. process.cwd() is read-only in production), fallback to /tmp
+    try {
+      const tmpDir = path.join("/tmp", ".pharmatree-data");
+      if (!fs.existsSync(tmpDir)) {
+        fs.mkdirSync(tmpDir, { recursive: true });
+      }
+      cachedDataDir = tmpDir;
+      return tmpDir;
+    } catch {
+      cachedDataDir = primary;
+      return primary;
+    }
+  }
+}
+
+function safeReadJson<T>(filename: string, fallback: T): T {
+  try {
+    const dir = ensureDataDir();
+    const filePath = path.join(dir, filename);
+    if (fs.existsSync(filePath)) {
+      const raw = fs.readFileSync(filePath, "utf-8");
+      return JSON.parse(raw);
+    }
+  } catch {
+    // Non-fatal read error; return fallback
+  }
+  return fallback;
+}
+
+function safeWriteJson(filename: string, data: any): void {
+  try {
+    const dir = ensureDataDir();
+    const filePath = path.join(dir, filename);
+    fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf-8");
+  } catch (err) {
+    // Non-fatal write failure (e.g. read-only filesystem); in-memory cache still holds state
+    console.warn(`[Database] safeWriteJson notice for ${filename} (falling back to memory):`, err);
   }
 }
 
@@ -145,7 +215,7 @@ export function hashClientIp(ip: string): string {
 }
 
 /**
- * Record a scan atomically using Postgres UPSERT or fallback to local disk
+ * Record a scan atomically using Postgres UPSERT or fallback to local disk/memory
  */
 export async function recordScanAtomic(
   unitId: string,
@@ -180,22 +250,14 @@ export async function recordScanAtomic(
         isFirstScan: count === 1,
       };
     } catch (err) {
-      console.warn("[Database] Postgres query failed, falling back to local file:", err);
+      console.warn("[Database] Postgres query failed, falling back to local file/memory:", err);
     }
   }
 
-  // Local fallback mode
-  ensureDataDir();
-  let scans: Record<string, any> = {};
-  try {
-    if (fs.existsSync(SCANS_FILE)) {
-      scans = JSON.parse(fs.readFileSync(SCANS_FILE, "utf-8"));
-    }
-  } catch {
-    scans = {};
-  }
+  // Local fallback mode (guaranteed non-throwing)
+  const diskScans = safeReadJson<Record<string, any>>("scans.json", {});
+  const existing = inMemoryScans[unitId] || diskScans[unitId];
 
-  const existing = scans[unitId];
   let record: any;
   if (existing) {
     record = {
@@ -215,12 +277,9 @@ export async function recordScanAtomic(
     };
   }
 
-  scans[unitId] = record;
-  try {
-    fs.writeFileSync(SCANS_FILE, JSON.stringify(scans, null, 2), "utf-8");
-  } catch (err) {
-    console.warn("Could not write scans to disk:", err);
-  }
+  inMemoryScans[unitId] = record;
+  diskScans[unitId] = record;
+  safeWriteJson("scans.json", diskScans);
 
   return {
     unitId,
@@ -263,28 +322,32 @@ export async function getScanRecord(unitId: string): Promise<DbScanRecord> {
         isFirstScan: true,
       };
     } catch (err) {
-      console.warn("[Database] Postgres query failed, falling back to local file:", err);
+      console.warn("[Database] Postgres query failed, falling back to local storage:", err);
     }
   }
 
-  // Fallback
-  ensureDataDir();
-  try {
-    if (fs.existsSync(SCANS_FILE)) {
-      const scans = JSON.parse(fs.readFileSync(SCANS_FILE, "utf-8"));
-      const existing = scans[unitId];
-      if (existing) {
-        return {
-          unitId,
-          scanCount: existing.scanCount,
-          firstScanTime: existing.firstScanTime,
-          lastScanTime: existing.lastScanTime,
-          isFirstScan: false,
-        };
-      }
-    }
-  } catch {
-    // Ignore
+  // Fallback (guaranteed non-throwing)
+  if (inMemoryScans[unitId]) {
+    return {
+      unitId,
+      scanCount: inMemoryScans[unitId].scanCount,
+      firstScanTime: inMemoryScans[unitId].firstScanTime,
+      lastScanTime: inMemoryScans[unitId].lastScanTime,
+      isFirstScan: false,
+    };
+  }
+
+  const diskScans = safeReadJson<Record<string, any>>("scans.json", {});
+  const existing = diskScans[unitId];
+  if (existing) {
+    inMemoryScans[unitId] = existing;
+    return {
+      unitId,
+      scanCount: existing.scanCount,
+      firstScanTime: existing.firstScanTime,
+      lastScanTime: existing.lastScanTime,
+      isFirstScan: false,
+    };
   }
 
   return {
@@ -297,7 +360,7 @@ export async function getScanRecord(unitId: string): Promise<DbScanRecord> {
 }
 
 /**
- * Save an incident report permanently in Postgres or local disk
+ * Save an incident report permanently in Postgres or local disk/memory
  */
 export async function saveIncidentReport(report: DbIncidentReport): Promise<void> {
   if (neonPool) {
@@ -327,26 +390,15 @@ export async function saveIncidentReport(report: DbIncidentReport): Promise<void
       );
       return;
     } catch (err) {
-      console.warn("[Database] Postgres incident save failed, falling back to disk:", err);
+      console.warn("[Database] Postgres incident save failed, falling back to disk/memory:", err);
     }
   }
 
   // Fallback
-  ensureDataDir();
-  let incidents: DbIncidentReport[] = [];
-  try {
-    if (fs.existsSync(INCIDENTS_FILE)) {
-      incidents = JSON.parse(fs.readFileSync(INCIDENTS_FILE, "utf-8"));
-    }
-  } catch {
-    incidents = [];
-  }
-  incidents.push(report);
-  try {
-    fs.writeFileSync(INCIDENTS_FILE, JSON.stringify(incidents, null, 2), "utf-8");
-  } catch (err) {
-    console.warn("Could not save incidents to disk:", err);
-  }
+  inMemoryIncidents.unshift(report);
+  const diskList = safeReadJson<DbIncidentReport[]>("incidents.json", []);
+  diskList.unshift(report);
+  safeWriteJson("incidents.json", diskList);
 }
 
 /**
@@ -382,22 +434,23 @@ export async function getIncidentsList(limit = 50): Promise<DbIncidentReport[]> 
         isoDate: row.iso_date,
       }));
     } catch (err) {
-      console.warn("[Database] Postgres incident retrieval failed, falling back to disk:", err);
+      console.warn("[Database] Postgres incident retrieval failed, falling back to disk/memory:", err);
     }
   }
 
   // Fallback
-  ensureDataDir();
-  try {
-    if (fs.existsSync(INCIDENTS_FILE)) {
-      const list: DbIncidentReport[] = JSON.parse(fs.readFileSync(INCIDENTS_FILE, "utf-8"));
-      list.sort((a, b) => b.timestamp - a.timestamp);
-      return list.slice(0, limit);
+  const diskList = safeReadJson<DbIncidentReport[]>("incidents.json", []);
+  const combined = [...inMemoryIncidents, ...diskList];
+  const seen = new Set<string>();
+  const deduped: DbIncidentReport[] = [];
+  for (const item of combined) {
+    if (!seen.has(item.incidentId)) {
+      seen.add(item.incidentId);
+      deduped.push(item);
     }
-  } catch {
-    // Ignore
   }
-  return [];
+  deduped.sort((a, b) => b.timestamp - a.timestamp);
+  return deduped.slice(0, limit);
 }
 
 export interface DbUnitRecord {
@@ -473,29 +526,18 @@ export async function upsertUnitRecord(unit: DbUnitRecord): Promise<void> {
       );
       return;
     } catch (err) {
-      console.warn("[Database] Postgres upsertUnitRecord failed, falling back to disk:", err);
+      console.warn("[Database] Postgres upsertUnitRecord failed, falling back to disk/memory:", err);
     }
   }
 
   // Local fallback
-  ensureDataDir();
-  let unitsMap: Record<string, DbUnitRecord> = {};
-  try {
-    if (fs.existsSync(UNITS_FILE)) {
-      unitsMap = JSON.parse(fs.readFileSync(UNITS_FILE, "utf-8"));
-    }
-  } catch {
-    unitsMap = {};
-  }
-  unitsMap[unit.unitId] = {
+  inMemoryUnits[unit.unitId] = {
     ...unit,
     updatedAt: new Date().toISOString(),
   };
-  try {
-    fs.writeFileSync(UNITS_FILE, JSON.stringify(unitsMap, null, 2), "utf-8");
-  } catch (err) {
-    console.warn("Could not write units to disk:", err);
-  }
+  const diskUnits = safeReadJson<Record<string, DbUnitRecord>>("units.json", {});
+  diskUnits[unit.unitId] = inMemoryUnits[unit.unitId];
+  safeWriteJson("units.json", diskUnits);
 }
 
 /**
@@ -533,19 +575,16 @@ export async function getUnitById(unitId: string): Promise<DbUnitRecord | null> 
       }
       return null;
     } catch (err) {
-      console.warn("[Database] Postgres getUnitById failed, falling back to disk:", err);
+      console.warn("[Database] Postgres getUnitById failed, falling back to disk/memory:", err);
     }
   }
 
   // Fallback
-  ensureDataDir();
-  try {
-    if (fs.existsSync(UNITS_FILE)) {
-      const unitsMap: Record<string, DbUnitRecord> = JSON.parse(fs.readFileSync(UNITS_FILE, "utf-8"));
-      return unitsMap[unitId] || null;
-    }
-  } catch {
-    // Ignore
+  if (inMemoryUnits[unitId]) return inMemoryUnits[unitId];
+  const diskUnits = safeReadJson<Record<string, DbUnitRecord>>("units.json", {});
+  if (diskUnits[unitId]) {
+    inMemoryUnits[unitId] = diskUnits[unitId];
+    return diskUnits[unitId];
   }
   return null;
 }
@@ -620,42 +659,34 @@ export async function getUnitsPaginated(filter: {
 
       return { units, nextCursor, total };
     } catch (err) {
-      console.warn("[Database] Postgres getUnitsPaginated failed, falling back to disk:", err);
+      console.warn("[Database] Postgres getUnitsPaginated failed, falling back to disk/memory:", err);
     }
   }
 
   // Fallback
-  ensureDataDir();
-  try {
-    if (fs.existsSync(UNITS_FILE)) {
-      const unitsMap: Record<string, DbUnitRecord> = JSON.parse(fs.readFileSync(UNITS_FILE, "utf-8"));
-      let allUnits = Object.values(unitsMap).sort(
-        (a, b) => Number(a.unitId) - Number(b.unitId)
-      );
+  const diskUnits = safeReadJson<Record<string, DbUnitRecord>>("units.json", {});
+  const mergedUnits = { ...diskUnits, ...inMemoryUnits };
+  let allUnits = Object.values(mergedUnits).sort(
+    (a, b) => Number(a.unitId) - Number(b.unitId)
+  );
 
-      if (cursor > 0) {
-        allUnits = allUnits.filter((u) => Number(u.unitId) > cursor);
-      }
-      if (filter.owner) {
-        const ownerLower = filter.owner.toLowerCase();
-        allUnits = allUnits.filter((u) => u.currentOwner.toLowerCase() === ownerLower);
-      }
-      if (filter.status !== undefined) {
-        allUnits = allUnits.filter((u) => u.status === filter.status);
-      }
-
-      const total = allUnits.length;
-      const sliced = allUnits.slice(0, limit);
-      const last = sliced[sliced.length - 1];
-      const nextCursor = sliced.length === limit && last ? Number(last.unitId) : null;
-
-      return { units: sliced, nextCursor, total };
-    }
-  } catch {
-    // Ignore
+  if (cursor > 0) {
+    allUnits = allUnits.filter((u) => Number(u.unitId) > cursor);
+  }
+  if (filter.owner) {
+    const ownerLower = filter.owner.toLowerCase();
+    allUnits = allUnits.filter((u) => u.currentOwner.toLowerCase() === ownerLower);
+  }
+  if (filter.status !== undefined) {
+    allUnits = allUnits.filter((u) => u.status === filter.status);
   }
 
-  return { units: [], nextCursor: null, total: 0 };
+  const total = allUnits.length;
+  const sliced = allUnits.slice(0, limit);
+  const last = sliced[sliced.length - 1];
+  const nextCursor = sliced.length === limit && last ? Number(last.unitId) : null;
+
+  return { units: sliced, nextCursor, total };
 }
 
 /**
@@ -680,26 +711,15 @@ export async function saveUnitEvent(event: DbUnitEvent): Promise<void> {
       );
       return;
     } catch (err) {
-      console.warn("[Database] Postgres saveUnitEvent failed, falling back to disk:", err);
+      console.warn("[Database] Postgres saveUnitEvent failed, falling back to disk/memory:", err);
     }
   }
 
   // Fallback
-  ensureDataDir();
-  let events: DbUnitEvent[] = [];
-  try {
-    if (fs.existsSync(UNIT_EVENTS_FILE)) {
-      events = JSON.parse(fs.readFileSync(UNIT_EVENTS_FILE, "utf-8"));
-    }
-  } catch {
-    events = [];
-  }
-  events.push(event);
-  try {
-    fs.writeFileSync(UNIT_EVENTS_FILE, JSON.stringify(events, null, 2), "utf-8");
-  } catch (err) {
-    console.warn("Could not save unit event to disk:", err);
-  }
+  inMemoryUnitEvents.push(event);
+  const diskEvents = safeReadJson<DbUnitEvent[]>("unit_events.json", []);
+  diskEvents.push(event);
+  safeWriteJson("unit_events.json", diskEvents);
 }
 
 /**
@@ -728,21 +748,14 @@ export async function getUnitEvents(unitId: string): Promise<DbUnitEvent[]> {
         timestamp: Number(r.timestamp),
       }));
     } catch (err) {
-      console.warn("[Database] Postgres getUnitEvents failed, falling back to disk:", err);
+      console.warn("[Database] Postgres getUnitEvents failed, falling back to disk/memory:", err);
     }
   }
 
   // Fallback
-  ensureDataDir();
-  try {
-    if (fs.existsSync(UNIT_EVENTS_FILE)) {
-      const events: DbUnitEvent[] = JSON.parse(fs.readFileSync(UNIT_EVENTS_FILE, "utf-8"));
-      return events.filter((e) => e.unitId === unitId);
-    }
-  } catch {
-    // Ignore
-  }
-  return [];
+  const diskEvents = safeReadJson<DbUnitEvent[]>("unit_events.json", []);
+  const combined = [...inMemoryUnitEvents, ...diskEvents];
+  return combined.filter((e) => e.unitId === unitId);
 }
 
 /**
@@ -760,21 +773,18 @@ export async function getLastIndexedBlock(defaultBlock = 11995000): Promise<numb
       }
       return defaultBlock;
     } catch (err) {
-      console.warn("[Database] Postgres getLastIndexedBlock failed, falling back to disk:", err);
+      console.warn("[Database] Postgres getLastIndexedBlock failed, falling back to disk/memory:", err);
     }
   }
 
   // Fallback
-  ensureDataDir();
-  try {
-    if (fs.existsSync(INDEXER_STATE_FILE)) {
-      const state = JSON.parse(fs.readFileSync(INDEXER_STATE_FILE, "utf-8"));
-      if (state.last_indexed_block) {
-        return Number(state.last_indexed_block);
-      }
-    }
-  } catch {
-    // Ignore
+  if (inMemoryIndexerState.last_indexed_block) {
+    return Number(inMemoryIndexerState.last_indexed_block);
+  }
+  const diskState = safeReadJson<Record<string, any>>("indexer_state.json", {});
+  if (diskState.last_indexed_block) {
+    inMemoryIndexerState.last_indexed_block = diskState.last_indexed_block;
+    return Number(diskState.last_indexed_block);
   }
   return defaultBlock;
 }
@@ -791,22 +801,15 @@ export async function setLastIndexedBlock(blockNumber: number): Promise<void> {
       );
       return;
     } catch (err) {
-      console.warn("[Database] Postgres setLastIndexedBlock failed, falling back to disk:", err);
+      console.warn("[Database] Postgres setLastIndexedBlock failed, falling back to disk/memory:", err);
     }
   }
 
   // Fallback
-  ensureDataDir();
-  try {
-    let state: Record<string, any> = {};
-    if (fs.existsSync(INDEXER_STATE_FILE)) {
-      state = JSON.parse(fs.readFileSync(INDEXER_STATE_FILE, "utf-8"));
-    }
-    state.last_indexed_block = blockNumber;
-    fs.writeFileSync(INDEXER_STATE_FILE, JSON.stringify(state, null, 2), "utf-8");
-  } catch (err) {
-    console.warn("Could not save indexer state to disk:", err);
-  }
+  inMemoryIndexerState.last_indexed_block = blockNumber;
+  const diskState = safeReadJson<Record<string, any>>("indexer_state.json", {});
+  diskState.last_indexed_block = blockNumber;
+  safeWriteJson("indexer_state.json", diskState);
 }
 
 export interface DbSealRecord {
@@ -846,19 +849,16 @@ export async function getSealRecord(unitId: string): Promise<DbSealRecord | null
       }
       return null;
     } catch (err) {
-      console.warn("[Database] Postgres getSealRecord failed, falling back to disk:", err);
+      console.warn("[Database] Postgres getSealRecord failed, falling back to disk/memory:", err);
     }
   }
 
   // Fallback
-  ensureDataDir();
-  try {
-    if (fs.existsSync(SEALS_FILE)) {
-      const seals: Record<string, DbSealRecord> = JSON.parse(fs.readFileSync(SEALS_FILE, "utf-8"));
-      return seals[unitId] || null;
-    }
-  } catch {
-    // Ignore
+  if (inMemorySeals[unitId]) return inMemorySeals[unitId];
+  const diskSeals = safeReadJson<Record<string, DbSealRecord>>("seals.json", {});
+  if (diskSeals[unitId]) {
+    inMemorySeals[unitId] = diskSeals[unitId];
+    return diskSeals[unitId];
   }
   return null;
 }
@@ -892,26 +892,15 @@ export async function upsertSealRecord(record: DbSealRecord): Promise<void> {
       );
       return;
     } catch (err) {
-      console.warn("[Database] Postgres upsertSealRecord failed, falling back to disk:", err);
+      console.warn("[Database] Postgres upsertSealRecord failed, falling back to disk/memory:", err);
     }
   }
 
   // Fallback
-  ensureDataDir();
-  let seals: Record<string, DbSealRecord> = {};
-  try {
-    if (fs.existsSync(SEALS_FILE)) {
-      seals = JSON.parse(fs.readFileSync(SEALS_FILE, "utf-8"));
-    }
-  } catch {
-    seals = {};
-  }
-  seals[record.unitId] = record;
-  try {
-    fs.writeFileSync(SEALS_FILE, JSON.stringify(seals, null, 2), "utf-8");
-  } catch (err) {
-    console.warn("Could not write seals to disk:", err);
-  }
+  inMemorySeals[record.unitId] = record;
+  const diskSeals = safeReadJson<Record<string, DbSealRecord>>("seals.json", {});
+  diskSeals[record.unitId] = record;
+  safeWriteJson("seals.json", diskSeals);
 }
 
 /**
@@ -988,4 +977,3 @@ export async function resetSealLockDb(unitId: string): Promise<void> {
     });
   }
 }
-

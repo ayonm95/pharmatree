@@ -78,7 +78,13 @@ export async function POST(req: NextRequest) {
 
     // Check if ID is out of bounds
     if (BigInt(unitId) > totalUnits) {
-      const scanRec = await recordScanAtomic(String(unitId), ip, "pos_terminal");
+      let scanRec: any = null;
+      try {
+        scanRec = await recordScanAtomic(String(unitId), ip, "pos_terminal");
+      } catch (scanErr) {
+        console.warn("Scan telemetry error for unregistered unit:", scanErr);
+      }
+
       const evalResult = evaluateTiers({
         unitId,
         totalUnitsOnChain: totalUnits,
@@ -99,7 +105,12 @@ export async function POST(req: NextRequest) {
 
     // 2. Fetch on-chain unit details
     const unitData = await contract.getUnitDetails(unitId);
-    const scanRec = await recordScanAtomic(String(unitId), ip, "pos_terminal");
+    let scanRec: any = null;
+    try {
+      scanRec = await recordScanAtomic(String(unitId), ip, "pos_terminal");
+    } catch (scanErr) {
+      console.warn("Scan telemetry recording non-fatal error:", scanErr);
+    }
 
     const parentId = unitData.parentId.toString();
     const rootId = unitData.rootId.toString();
@@ -127,16 +138,22 @@ export async function POST(req: NextRequest) {
     };
 
     // 3. Scratch Seal Evaluation
-    let sealRecord = await getSealRecord(String(unitId));
+    let sealRecord: any = null;
     let sealResult: any = null;
 
-    if (scratchSecret) {
-      sealResult = await verifyUnitSeal({
-        unitId,
-        secret: scratchSecret,
-        manufacturerAddress: manufacturer,
-      });
+    try {
       sealRecord = await getSealRecord(String(unitId));
+
+      if (scratchSecret) {
+        sealResult = await verifyUnitSeal({
+          unitId,
+          secret: scratchSecret,
+          manufacturerAddress: manufacturer,
+        });
+        sealRecord = await getSealRecord(String(unitId));
+      }
+    } catch (sealErr) {
+      console.warn("Seal retrieval non-fatal error:", sealErr);
     }
 
     // 4. Pure 5-Tier Evaluation
