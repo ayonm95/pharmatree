@@ -55,6 +55,7 @@ type UnitRecord = {
   serialHash?: string;
   expiry?: number;
   isRecalled?: boolean;
+  isExpired?: boolean;
 };
 
 type TimelineEvent = {
@@ -270,6 +271,9 @@ function VerifyContent() {
           isRecalled = await contract.recalledRoots(rootBigInt);
         } catch {}
 
+        const nowSec = Math.floor(Date.now() / 1000);
+        const isExpired = onChainExpiry > 0 && nowSec > onChainExpiry;
+
         const loadedUnit: UnitRecord = {
           id: String(activeUnitId),
           parentId: String(detail[0]),
@@ -284,6 +288,7 @@ function VerifyContent() {
           serialHash: onChainSerialHash,
           expiry: onChainExpiry,
           isRecalled,
+          isExpired,
         };
 
         // 2. Recursive Lineage Resolution: traverse up the parent tree
@@ -511,7 +516,7 @@ function VerifyContent() {
     return () => {
       cancelled = true;
     };
-  }, [activeUnitId]);
+  }, [activeUnitId, searchParams]);
 
   const getMedicineName = (metadata?: string) => {
     if (!metadata) return "Medicine";
@@ -585,9 +590,7 @@ function VerifyContent() {
   const isSold = unit?.status === 2;
   const isActive = unit?.status === 0;
   const isRecalled = unit?.isRecalled === true;
-  const isExpired = Boolean(
-    unit?.expiry && unit.expiry > 0 && Math.floor(Date.now() / 1000) > unit.expiry
-  );
+  const isExpired = unit?.isExpired === true;
 
   let verdict = {
     title: "Verified Authentic Pharmaceutical",
