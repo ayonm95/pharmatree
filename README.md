@@ -21,7 +21,7 @@
 - **Hierarchical Lineage Tracking**: Models pharmaceutical packaging hierarchy:
   $$\text{Container} \longrightarrow \text{Shipment} \longrightarrow \text{Batch} \longrightarrow \text{Box} \longrightarrow \text{Individual Item}$$
 - **Two-Party Custody Handshake & Audit Trail**: Inbound shipments require mutual acceptance by the authorized recipient. Receivers can reject damaged or compromised shipments, recording an immutable audit trail (`TransferRejected`). Quarantined stock can only be cleared back to active status through verifiable QA audit clearance (`clearRejected(unitId, evidenceHash)`).
-- **Inventory Partitioning**: Supports fractional custody transfers (`initiatePartialTransfer`) and partial retail dispensing (`sellQuantity`), preserving sender remainders while detaching new child units.
+- **Inventory Partitioning**: Supports fractional custody transfers (`initiatePartialTransfer`) and partial retail dispensing (`sellQuantityWithSerialHash`), preserving sender remainders while detaching new child units with unique off-chain serial hashes and on-chain collision checks.
 - **Vendor POS Scanner Terminal (`/pos`)**: High-throughput kiosk scanner for retail dispensaries. Features rapid keyboard checkout (`Spacebar` / `Enter`), collapsible tamper-seal inspection, dual camera/USB-wedge barcode listeners, gasless relayer execution, Web Audio feedback, child unit QR label emission for partial sales, and quarantine incident telemetry.
 - **Role-Adaptive Verification Portal (`/verify`)**: 4-Stage visual supply chain journey stepper (`Genesis` -> `Handshakes` -> `POS` -> `Patient Verification`). Connected handlers can accept/reject shipments in 1 click; consumers receive clear guidance driven by physical scratch-off tamper seal verification, distinguishing legitimate prescription rescans from potential cloning.
 - **GS1 Digital Link Compliance**: Formats and parses standard GS1 URIs (`/01/{GTIN}/10/{Lot}/21/{Serial}`), Modulo 10 Luhn check digits, ASCII `\x1d` element strings, and 2D GS1 DataMatrix barcodes.
@@ -92,7 +92,7 @@ flowchart TD
 | **ERC-2771 Forwarder** | [`0x2d24b5b481d0981AE7904790e9d8BF4c162b6c8c`](https://sepolia.etherscan.io/address/0x2d24b5b481d0981AE7904790e9d8BF4c162b6c8c#code) (Verified) |
 | **Hot Relayer (0 Roles)** | [`0x335684Cfb813f673fed3f2bb87BF2778D4E96A72`](https://sepolia.etherscan.io/address/0x335684Cfb813f673fed3f2bb87BF2778D4E96A72) |
 | **Deployment Block** | `12033849` |
-| **Solidity Compiler** | `v0.8.24+commit.e11b9ed9` (Pragma `^0.8.20`) |
+| **Solidity Compiler** | `v0.8.28` (Hardhat EVM Cancun) |
 
 ### Pre-Configured Test Wallets
 
@@ -164,18 +164,18 @@ npm run dev
 
 ---
 
-## 🧪 Testing & Validation (123 Automated Tests)
+## 🧪 Testing & Validation (133 Automated Tests)
 
-The monorepo maintains **123 automated tests passing** across 10 test suites (70 Hardhat contract & invariant tests + 53 Vitest frontend API security & evaluator tests):
+The monorepo maintains **133 automated tests passing** across 11 test suites (80 Hardhat contract & invariant tests + 53 Vitest frontend API security & evaluator tests):
 
 ```bash
-# Run all smart contract, invariant, and GS1 tests (70 tests)
+# Run all smart contract, invariant, and GS1 tests (80 tests)
 npm test
 
 # Run frontend API security, tenant auth, and evaluator tests (53 tests)
 npm run test:frontend
 
-# Run full test suite across both packages (123 tests)
+# Run full test suite across both packages (133 tests)
 npm run test:all
 
 # Run linter and type-checking

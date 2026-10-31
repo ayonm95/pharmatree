@@ -460,16 +460,16 @@ npm run dev
 
 ## 15. Automated Testing & Invariant Validation
 
-The monorepo features **123 passing automated tests** across 10 test suites (70 Hardhat contract & invariant tests + 53 Vitest frontend API security & evaluator tests):
+The monorepo features **133 passing automated tests** across 11 test suites (80 Hardhat contract & invariant tests + 53 Vitest frontend API security & evaluator tests):
 
 ```bash
-# Run all smart contract, invariant, and GS1 tests (70 tests)
+# Run all smart contract, invariant, and GS1 tests (80 tests)
 npm test
 
 # Run frontend API security, tenant auth, and evaluator tests (53 tests)
 npm run test:frontend
 
-# Run full test suite across both packages (123 tests)
+# Run full test suite across both packages (133 tests)
 npm run test:all
 
 # Run linter and type-checking
