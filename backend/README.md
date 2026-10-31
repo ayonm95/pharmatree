@@ -29,14 +29,14 @@ The smart contract foundation of the **PharmaTree** decentralized pharmaceutical
   - `initiatePartialTransfer(unitId, receiver, quantity)`: Splits available quantity, preserving sender remainder and minting a child unit with inherited parent/root lineage.
   - `acceptTransfer(unitId)`: Authorized recipient accepts custody, transitioning state to `Active`.
   - `rejectTransfer(unitId)`: Authorized recipient rejects inbound shipment, transitioning state to `Rejected`.
-  - `reclaimRejectedUnit(unitId)`: Current owner reclaims rejected stock.
+  - `clearRejected(unitId, evidenceHash)`: Authorized QA auditor (`QA_ROLE`) clears quarantine back to `Active` after formal inspection with cryptographic audit evidence.
 - **Dispensing & Sale Detachment**:
-  - `sellQuantity(unitId, quantity)`: Splits stock and marks partial dispensing on-chain with updated metadata.
-  - `markAsSold(unitId)`: Finalizes complete unit sale, permanently locking it against subsequent transfers.
+  - `sellQuantity(unitId, quantity)`: Splits stock and marks partial dispensing on-chain (`DISPENSER_ROLE` required).
+  - `markAsSold(unitId)`: Finalizes complete unit sale, permanently locking it against subsequent transfers (`DISPENSER_ROLE` required).
 
 ---
 
-## 🧪 Testing Suite (25 Test Cases)
+## 🧪 Testing Suite (70 Automated Tests)
 
 Run the Chai/Hardhat test suite:
 
@@ -44,12 +44,14 @@ Run the Chai/Hardhat test suite:
 npm test
 ```
 
-All 25 comprehensive test scenarios validate:
-1. **Admin & Role Authorization**: Role assignment, admin initialization, and unauthorized access reverts.
-2. **Hierarchical Creation**: Root unit creation, parent/root lineage tracking, batch packing limits, and hierarchy level enforcement.
-3. **Partial Transfers**: Sender remainder retention and child unit detachment.
-4. **Two-Party Handshake**: Mutual acceptance, unauthorized recipient prevention, wrong-caller reverts, transfer cancellation, and rejection handling.
-5. **Final Sale & Detachment**: Complete and partial sales (`sellQuantity`), quantity conservation, and transfer prevention on sold stock.
+All 70 comprehensive test scenarios validate:
+1. **Admin & Role Authorization**: Role assignment, admin initialization, role revocation, and strict segregation of `HANDLER_ROLE`, `DISPENSER_ROLE`, and `QA_ROLE`.
+2. **Hierarchical Creation**: Root unit creation, parent/root lineage tracking, batch packing limits, hierarchy level enforcement, and unguessable `serialHash` registration.
+3. **Partial Transfers**: Sender remainder retention, child unit detachment, and mass conservation ($\sum Q$).
+4. **Two-Party Handshake & Quarantine**: Mutual acceptance, unauthorized recipient prevention, wrong-caller reverts, transfer cancellation, transit rejection, and role-gated QA audit clearance (`clearRejected`).
+5. **Dispensing, Expiry & Recalls**: Retail dispensing validation, expiration blocking (`expiry`), batch-wide recall freezing (`recalledRoots`), and transfer prevention on sold stock.
+6. **EIP-712 Meta-Transactions & Relayer Decoupling**: Gasless forwarder execution with an unprivileged relayer holding zero contract roles.
+7. **Randomized Property Tests**: 35 randomized supply-chain operations verifying strict inventory mass conservation under concurrency.
 
 ---
 

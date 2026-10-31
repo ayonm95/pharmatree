@@ -1,6 +1,12 @@
 [extend]
 useDefault = true
 
+[[rules]]
+id = "generic-private-key-64hex"
+description = "64-character hex private key"
+regex = '''(?i)(?:private_key|secret|relayer_key)\s*[:=]\s*['"]?([a-f0-9]{64})['"]?'''
+keywords = ["relayer_key", "private_key", "secret"]
+
 [allowlist]
 description = "Global allowlist for example env files and test fixtures"
 paths = [
@@ -9,5 +15,6 @@ paths = [
   '''^frontend/\.env\.example$''',
   '''^backend/test/.*''',
   '''^frontend/test/.*''',
+  '''^backend/scripts/e2e-sepolia-validation\.ts$''',
   '''^README\.md$'''
 ]

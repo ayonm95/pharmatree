@@ -42,8 +42,16 @@ async function main() {
     );
   }
 
+  let forwarderAddress = process.env.TRUSTED_FORWARDER || process.env.NEXT_PUBLIC_TRUSTED_FORWARDER;
+  if (!forwarderAddress || forwarderAddress === ethers.ZeroAddress) {
+    const ForwarderFactory = await ethers.getContractFactory("PharmaTreeForwarder", deployer);
+    const forwarder = await ForwarderFactory.deploy("PharmaTreeForwarder");
+    await forwarder.waitForDeployment();
+    forwarderAddress = await forwarder.getAddress();
+  }
+
   const Factory = await ethers.getContractFactory("PharmaTree", deployer);
-  const contract = await Factory.deploy();
+  const contract = await Factory.deploy(forwarderAddress);
   const deploymentReceipt = await contract.deploymentTransaction()?.wait();
   const contractAddress = await contract.getAddress();
 

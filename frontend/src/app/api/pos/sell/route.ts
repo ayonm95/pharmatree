@@ -25,6 +25,7 @@ import {
   resolveTenantFromHeadersAsync,
   isVendorAllowedForTenant,
   checkTenantDailyQuota,
+  getQuotaForTier,
 } from "@/lib/tenantAuth";
 
 /**
@@ -60,6 +61,20 @@ async function executeWithNonceRetry<T>(
     }
   }
   throw new Error("Relayer transaction failed after maximum retries");
+}
+
+function extractSoldUnitId(receipt: any, fallbackId: number): number {
+  if (!receipt || !receipt.logs) return fallbackId;
+  const iface = new ethers.Interface(PHARMA_TREE_ABI);
+  for (const log of receipt.logs) {
+    try {
+      const parsed = iface.parseLog(log);
+      if (parsed && parsed.name === "UnitSold") {
+        return Number(parsed.args[0]);
+      }
+    } catch {}
+  }
+  return fallbackId;
 }
 
 export async function POST(req: NextRequest) {
@@ -110,33 +125,9 @@ export async function POST(req: NextRequest) {
   rateHeaders["X-Tenant-ID"] = tenant.id;
   rateHeaders["X-Tenant-Tier"] = tenant.tier;
 
-  const idempotencyKey =
+  const rawIdempotencyKey =
     req.headers.get("idempotency-key") || req.headers.get("x-idempotency-key");
-  if (idempotencyKey) {
-    const existing = await getSaleByIdempotencyKey(idempotencyKey);
-    if (existing) {
-      if (existing.status === "MINED" && existing.responsePayload) {
-        return NextResponse.json(existing.responsePayload, {
-          headers: {
-            ...rateHeaders,
-            "X-Idempotency-Replay": "true",
-          },
-        });
-      }
-      if (existing.status === "SUBMITTED") {
-        return NextResponse.json(
-          {
-            success: false,
-            error: "TRANSACTION_IN_PROGRESS",
-            txHash: existing.txHash,
-            message:
-              "A dispensing transaction with this Idempotency-Key has already been submitted and is pending confirmation.",
-          },
-          { status: 409, headers: rateHeaders }
-        );
-      }
-    }
-  }
+  const idempotencyKey = rawIdempotencyKey ? `${tenant.id}:${rawIdempotencyKey.trim()}` : null;
 
   try {
     const body = await req.json();
@@ -169,6 +160,89 @@ export async function POST(req: NextRequest) {
 
     const provider = getReadonlyProvider();
     const readContract = new ethers.Contract(PHARMA_TREE_CONTRACT, PHARMA_TREE_ABI, provider);
+
+    // Idempotency check with tenant scoping, payload match verification, and status reconciliation
+    if (idempotencyKey) {
+      const existing = await getSaleByIdempotencyKey(idempotencyKey);
+      if (existing) {
+        if (
+          existing.unitId !== unitId ||
+          (requestedQty !== null && existing.quantity !== requestedQty)
+        ) {
+          return NextResponse.json(
+            {
+              success: false,
+              error: "IDEMPOTENCY_KEY_PAYLOAD_MISMATCH",
+              message:
+                "Idempotency key was previously submitted with a different unitId or quantity payload.",
+            },
+            { status: 422, headers: rateHeaders }
+          );
+        }
+
+        if (existing.status === "MINED" && existing.responsePayload) {
+          return NextResponse.json(existing.responsePayload, {
+            headers: {
+              ...rateHeaders,
+              "X-Idempotency-Replay": "true",
+            },
+          });
+        }
+
+        if (existing.status === "SUBMITTED") {
+          if (existing.txHash) {
+            try {
+              const receipt = await provider.getTransactionReceipt(existing.txHash);
+              if (receipt) {
+                if (receipt.status === 1) {
+                  const minedPayload = existing.responsePayload || {
+                    success: true,
+                    txHash: existing.txHash,
+                    blockNumber: receipt.blockNumber,
+                    unitId: existing.unitId,
+                    soldUnitId: existing.unitId,
+                    dispensedQuantity: existing.quantity,
+                    tenant: { id: tenant.id, name: tenant.name, tier: tenant.tier },
+                    timestamp: Math.floor(Date.now() / 1000),
+                  };
+                  await recordSaleCompleted(idempotencyKey, existing.txHash, minedPayload);
+                  return NextResponse.json(minedPayload, {
+                    headers: {
+                      ...rateHeaders,
+                      "X-Idempotency-Replay": "true",
+                    },
+                  });
+                } else if (receipt.status === 0) {
+                  await recordSaleFailed(idempotencyKey, "Transaction reverted on-chain");
+                  return NextResponse.json(
+                    {
+                      success: false,
+                      error: "TRANSACTION_REVERTED",
+                      txHash: existing.txHash,
+                      message: "The on-chain transaction for this idempotency key reverted.",
+                    },
+                    { status: 500, headers: rateHeaders }
+                  );
+                }
+              }
+            } catch (rErr) {
+              console.warn("Could not query transaction receipt for idempotency key:", rErr);
+            }
+          }
+
+          return NextResponse.json(
+            {
+              success: false,
+              error: "TRANSACTION_IN_PROGRESS",
+              txHash: existing.txHash,
+              message:
+                "A dispensing transaction with this Idempotency-Key has already been submitted and is pending confirmation.",
+            },
+            { status: 409, headers: rateHeaders }
+          );
+        }
+      }
+    }
 
     // 2. Verify on-chain state atomically before attempting any sale
     const unit = await readContract.getUnitDetails(unitId);
@@ -212,8 +286,21 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const effectiveTierLimit = getQuotaForTier(tenant.tier);
+    if (effectiveTierLimit === null) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "UNKNOWN_TENANT_TIER",
+          message: `Tenant '${tenant.name}' has unrecognized tier '${tenant.tier}'. Quota lookup failed closed.`,
+        },
+        { status: 403, headers: rateHeaders }
+      );
+    }
+    const tenantDailyLimit =
+      tenant.dailyQuota > 0 ? Math.min(tenant.dailyQuota, effectiveTierLimit) : effectiveTierLimit;
     const clientIp = getClientIp(req);
-    const tenantQuota = await checkTenantDailyQuota(tenant.id, tenant.dailyQuota, clientIp);
+    const tenantQuota = await checkTenantDailyQuota(tenant.id, tenantDailyLimit, clientIp);
     rateHeaders["X-Tenant-Quota-Remaining"] = String(tenantQuota.remaining);
 
     if (!tenantQuota.allowed) {
@@ -222,7 +309,7 @@ export async function POST(req: NextRequest) {
           {
             success: false,
             error: "DEMO_QUOTA_EXCEEDED",
-            message: `Demo Dispensing Daily Allowance Reached for this device/IP (${tenant.dailyQuota}/${tenant.dailyQuota} demo transactions used today). This limit protects testnet relayer gas. Connect a dispensary wallet to sign directly, or try again tomorrow.`,
+            message: `Demo Dispensing Daily Allowance Reached for this device/IP (${tenantDailyLimit}/${tenantDailyLimit} demo transactions used today). This limit protects testnet relayer gas. Connect a dispensary wallet to sign directly, or try again tomorrow.`,
           },
           { status: 429, headers: rateHeaders }
         );
@@ -231,7 +318,7 @@ export async function POST(req: NextRequest) {
         {
           success: false,
           error: "TENANT_DAILY_QUOTA_EXCEEDED",
-          message: `Daily transaction quota exceeded for tenant '${tenant.name}' (${tenant.dailyQuota} tx/day limit). Contact sales to upgrade your tier.`,
+          message: `Daily transaction quota exceeded for tenant '${tenant.name}' (${tenantDailyLimit} tx/day limit). Contact sales to upgrade your tier.`,
         },
         { status: 429, headers: rateHeaders }
       );
@@ -353,12 +440,14 @@ export async function POST(req: NextRequest) {
       );
       const receipt = await tx.wait(1);
 
+      const soldUnitId = extractSoldUnitId(receipt, unitId);
       const responsePayload = {
         success: true,
         relayed: true,
         txHash: tx.hash,
         blockNumber: receipt?.blockNumber,
         unitId,
+        soldUnitId,
         dispensedQuantity: dispenseQty,
         remainingQuantity: unitQuantity - dispenseQty,
         isFractional: dispenseQty < unitQuantity,
@@ -439,11 +528,13 @@ export async function POST(req: NextRequest) {
 
     const receipt = await tx.wait(1);
 
+    const soldUnitId = extractSoldUnitId(receipt, unitId);
     const responsePayload = {
       success: true,
       txHash: tx.hash,
       blockNumber: receipt?.blockNumber,
       unitId,
+      soldUnitId,
       dispensedQuantity: dispenseQty,
       remainingQuantity: unitQuantity - dispenseQty,
       isFractional: dispenseQty < unitQuantity,

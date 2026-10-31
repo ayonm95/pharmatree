@@ -80,6 +80,26 @@ async function main() {
     console.log(`Handler role already present for ${distributorAddress}`);
   }
 
+  // A retail pharmacy requires DISPENSER_ROLE in addition to HANDLER_ROLE to sell stock
+  const currentDispenser = await contract.isDispenser(distributorAddress);
+  if (!currentDispenser) {
+    const tx = await contract.addDispenser(distributorAddress);
+    await tx.wait();
+    console.log(`Granted Dispenser role to ${distributorAddress}`);
+  } else {
+    console.log(`Dispenser role already present for ${distributorAddress}`);
+  }
+
+  // Grant QA role to admin/manufacturer wallet for recall and clearRejected management
+  const currentQA = await contract.isQA(adminWallet.address);
+  if (!currentQA) {
+    const tx = await contract.addQA(adminWallet.address);
+    await tx.wait();
+    console.log(`Granted QA role to ${adminWallet.address}`);
+  } else {
+    console.log(`QA role already present for ${adminWallet.address}`);
+  }
+
   console.log("Done.");
   console.log("Rule: The deployer wallet is always manufacturer/admin until you build a real admin panel.");
   console.log("adminWallet:", adminWallet.address || "not set");

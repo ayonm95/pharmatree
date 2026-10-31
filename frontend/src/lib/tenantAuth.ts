@@ -7,20 +7,40 @@ import {
   getDurableTenantByApiKeyHash,
 } from "./db";
 
-export type TenantTier = "sandbox" | "starter" | "enterprise";
+export type TenantTier = "sandbox" | "starter" | "standard" | "enterprise";
 export type TenantStatus = "active" | "suspended";
 
 /**
  * Canonical Tier Quotas across the platform:
  * - Sandbox: 10 tx/day
- * - Starter: 100 tx/day
+ * - Starter / Standard: 100 tx/day
  * - Enterprise: 1000 tx/day
  */
-export const TIER_QUOTAS: Record<TenantTier, number> = {
+export const TIER_QUOTAS: Record<string, number> = {
   sandbox: 10,
   starter: 100,
+  standard: 100, // Alias for starter
   enterprise: 1000,
 };
+
+/**
+ * Resolves the daily transaction quota for a tenant tier.
+ * Unknown or undefined tiers fail closed by returning null.
+ */
+export function getQuotaForTier(tier: string | undefined | null): number | null {
+  if (!tier || typeof tier !== "string") return null;
+  const normalized = tier.toLowerCase().trim();
+  if (normalized === "standard" || normalized === "starter") {
+    return TIER_QUOTAS.starter;
+  }
+  if (normalized === "sandbox") {
+    return TIER_QUOTAS.sandbox;
+  }
+  if (normalized === "enterprise") {
+    return TIER_QUOTAS.enterprise;
+  }
+  return null; // Unknown tiers fail closed!
+}
 
 export interface TenantRecord {
   id: string;
@@ -277,6 +297,10 @@ export async function checkTenantDailyQuota(
   limit: number,
   clientIp?: string
 ): Promise<{ allowed: boolean; count: number; remaining: number }> {
+  // Fail closed if limit is invalid or non-positive
+  if (!limit || limit <= 0 || isNaN(limit)) {
+    return { allowed: false, count: 0, remaining: 0 };
+  }
   return checkAndIncrementTenantQuotaDb(tenantId, limit, clientIp);
 }
 

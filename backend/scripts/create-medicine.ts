@@ -36,7 +36,15 @@ async function main() {
   if (!Number.isInteger(quantity) || quantity <= 0) throw new Error("MEDICINE_QUANTITY must be a positive integer");
 
   const metadata = `ipfs://demo-medicine-sepolia-${Date.now()}`;
-  const tx = await contract.createRootUnit(0, metadata, quantity);
+  const serial = process.env.MEDICINE_SERIAL || `SN-${Date.now()}-${Math.random().toString(36).slice(2, 8).toUpperCase()}`;
+  const expiry = Number(process.env.MEDICINE_EXPIRY || Math.floor(Date.now() / 1000) + 730 * 86400);
+
+  let tx;
+  try {
+    tx = await contract.createRootUnitWithSerial(0, metadata, quantity, serial, expiry);
+  } catch {
+    tx = await contract.createRootUnit(0, metadata, quantity);
+  }
   await tx.wait();
 
   const counterAfter = Number(await contract.unitCounter());

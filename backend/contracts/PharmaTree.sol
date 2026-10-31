@@ -174,6 +174,18 @@ contract PharmaTree is AccessControl, ERC2771Context {
         return _createRootUnit(_level, _metadata, _quantity, bytes32(0), 0);
     }
 
+    struct CreateUnitParams {
+        uint256 parentId;
+        uint256 rootId;
+        UnitLevel level;
+        address manufacturer;
+        address owner;
+        string metadata;
+        uint256 quantity;
+        bytes32 serialHash;
+        uint256 expiry;
+    }
+
     function createRootUnitWithSerial(
         UnitLevel _level,
         string calldata _metadata,
@@ -181,7 +193,8 @@ contract PharmaTree is AccessControl, ERC2771Context {
         string calldata _serial,
         uint256 _expiry
     ) external returns (uint256) {
-        bytes32 sHash = bytes(_serial).length > 0 ? keccak256(bytes(_serial)) : bytes32(0);
+        require(bytes(_serial).length > 0, "Serial number required for new mints");
+        bytes32 sHash = keccak256(bytes(_serial));
         return _createRootUnit(_level, _metadata, _quantity, sHash, _expiry);
     }
 
@@ -194,7 +207,17 @@ contract PharmaTree is AccessControl, ERC2771Context {
     ) internal returns (uint256) {
         require(hasRole(MANUFACTURER_ROLE, _msgSender()), "Only manufacturers can create root units");
         require(_quantity > 0, "Quantity must be greater than zero");
-        return _createUnit(0, 0, _level, _msgSender(), _msgSender(), _metadata, _quantity, _serialHash, _expiry);
+        return _createUnit(CreateUnitParams({
+            parentId: 0,
+            rootId: 0,
+            level: _level,
+            manufacturer: _msgSender(),
+            owner: _msgSender(),
+            metadata: _metadata,
+            quantity: _quantity,
+            serialHash: _serialHash,
+            expiry: _expiry
+        }));
     }
 
     function createChildUnits(uint256 _parentId, UnitLevel _childLevel, string calldata _metadata, uint256 _count) external {
@@ -231,50 +254,40 @@ contract PharmaTree is AccessControl, ERC2771Context {
         uint256 expiry = units[_parentId].expiry;
 
         for (uint256 i = 0; i < _count; i++) {
-            uint256 childId = _createUnit(
-                _parentId,
-                rootId,
-                _childLevel,
-                originalMfr,
-                _msgSender(),
-                _metadata,
-                1,
-                _serialHash,
-                expiry
-            );
+            uint256 childId = _createUnit(CreateUnitParams({
+                parentId: _parentId,
+                rootId: rootId,
+                level: _childLevel,
+                manufacturer: originalMfr,
+                owner: _msgSender(),
+                metadata: _metadata,
+                quantity: 1,
+                serialHash: _serialHash,
+                expiry: expiry
+            }));
             children[_parentId].push(childId);
         }
     }
 
-    function _createUnit(
-        uint256 _parentId,
-        uint256 _rootId,
-        UnitLevel _level,
-        address _manufacturer,
-        address _owner,
-        string memory _metadata,
-        uint256 _quantity,
-        bytes32 _serialHash,
-        uint256 _expiry
-    ) internal returns (uint256) {
+    function _createUnit(CreateUnitParams memory params) internal returns (uint256) {
         unitCounter++;
         uint256 unitId = unitCounter;
 
         units[unitId] = Unit({
-            parentId: _parentId,
-            rootId: _rootId,
-            level: _level,
-            manufacturer: _manufacturer,
-            currentOwner: _owner,
+            parentId: params.parentId,
+            rootId: params.rootId,
+            level: params.level,
+            manufacturer: params.manufacturer,
+            currentOwner: params.owner,
             pendingReceiver: address(0),
             status: Status.Active,
-            quantity: _quantity,
-            metadata: _metadata,
-            serialHash: _serialHash,
-            expiry: _expiry
+            quantity: params.quantity,
+            metadata: params.metadata,
+            serialHash: params.serialHash,
+            expiry: params.expiry
         });
 
-        emit UnitCreated(unitId, _parentId, _level, _owner);
+        emit UnitCreated(unitId, params.parentId, params.level, params.owner);
         return unitId;
     }
 
@@ -318,17 +331,17 @@ contract PharmaTree is AccessControl, ERC2771Context {
             units[_id].metadata = _formatMetadata(baseMeta, remainingQuantity);
 
             string memory childMetadata = _formatMetadata(baseMeta, _quantity);
-            transferId = _createUnit(
-                _id,
-                units[_id].rootId == 0 ? _id : units[_id].rootId,
-                units[_id].level,
-                units[_id].manufacturer,
-                _msgSender(),
-                childMetadata,
-                _quantity,
-                units[_id].serialHash,
-                units[_id].expiry
-            );
+            transferId = _createUnit(CreateUnitParams({
+                parentId: _id,
+                rootId: units[_id].rootId == 0 ? _id : units[_id].rootId,
+                level: units[_id].level,
+                manufacturer: units[_id].manufacturer,
+                owner: _msgSender(),
+                metadata: childMetadata,
+                quantity: _quantity,
+                serialHash: units[_id].serialHash,
+                expiry: units[_id].expiry
+            }));
             children[_id].push(transferId);
         }
 
@@ -398,17 +411,17 @@ contract PharmaTree is AccessControl, ERC2771Context {
                 ? keccak256(bytes(_childSerial))
                 : units[_id].serialHash;
 
-            soldUnitId = _createUnit(
-                _id,
-                units[_id].rootId == 0 ? _id : units[_id].rootId,
-                units[_id].level,
-                units[_id].manufacturer,
-                _msgSender(),
-                soldMetadata,
-                _quantity,
-                childSerialHash,
-                units[_id].expiry
-            );
+            soldUnitId = _createUnit(CreateUnitParams({
+                parentId: _id,
+                rootId: units[_id].rootId == 0 ? _id : units[_id].rootId,
+                level: units[_id].level,
+                manufacturer: units[_id].manufacturer,
+                owner: _msgSender(),
+                metadata: soldMetadata,
+                quantity: _quantity,
+                serialHash: childSerialHash,
+                expiry: units[_id].expiry
+            }));
             children[_id].push(soldUnitId);
         }
 

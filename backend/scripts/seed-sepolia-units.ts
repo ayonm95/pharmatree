@@ -38,7 +38,7 @@ async function main() {
     console.log(`Deployer already has MANUFACTURER_ROLE.`);
   }
 
-  // 2. Check & Grant HANDLER_ROLE to dispensary / distributor wallets
+  // 2. Check & Grant HANDLER_ROLE and DISPENSER_ROLE to dispensary / distributor wallets
   const handlers = [
     "0xe88a5608B536BCc9d557823234BacA9a00F2540B",
     "0x1589df48e9F04926E260Bf813c42dFb4a71893A3",
@@ -52,6 +52,16 @@ async function main() {
       console.log(`✅ Granted HANDLER_ROLE to ${h}`);
     } else {
       console.log(`${h} already has HANDLER_ROLE.`);
+    }
+
+    const isDisp = await contract.isDispenser(h);
+    if (!isDisp) {
+      console.log(`Granting DISPENSER_ROLE to ${h}...`);
+      const tx = await contract.addDispenser(h);
+      await tx.wait(1);
+      console.log(`✅ Granted DISPENSER_ROLE to ${h}`);
+    } else {
+      console.log(`${h} already has DISPENSER_ROLE.`);
     }
   }
 

@@ -222,6 +222,35 @@ describe("Tenant Authentication & Authorization System (TDD)", () => {
     });
   });
 
+  describe("Tier Quota Lookup & Fail-Closed Policies", () => {
+    it("should resolve canonical quotas and support standard as alias for starter", async () => {
+      const { getQuotaForTier, TIER_QUOTAS } = await import("../src/lib/tenantAuth");
+      expect(getQuotaForTier("sandbox")).toBe(TIER_QUOTAS.sandbox);
+      expect(getQuotaForTier("starter")).toBe(TIER_QUOTAS.starter);
+      expect(getQuotaForTier("standard")).toBe(TIER_QUOTAS.starter); // Alias check
+      expect(getQuotaForTier("enterprise")).toBe(TIER_QUOTAS.enterprise);
+    });
+
+    it("should fail closed and return null for unrecognized tiers", async () => {
+      const { getQuotaForTier } = await import("../src/lib/tenantAuth");
+      expect(getQuotaForTier("unknown")).toBeNull();
+      expect(getQuotaForTier("free")).toBeNull();
+      expect(getQuotaForTier("vip")).toBeNull();
+      expect(getQuotaForTier("")).toBeNull();
+      expect(getQuotaForTier(undefined as any)).toBeNull();
+    });
+
+    it("should fail closed in checkTenantDailyQuota when limit is zero or negative", async () => {
+      const resZero = await checkTenantDailyQuota("tenant-test", 0);
+      expect(resZero.allowed).toBe(false);
+      expect(resZero.remaining).toBe(0);
+
+      const resNeg = await checkTenantDailyQuota("tenant-test", -10);
+      expect(resNeg.allowed).toBe(false);
+      expect(resNeg.remaining).toBe(0);
+    });
+  });
+
   describe("Anti-Replay Nonce Verification for Administrative Resets", () => {
     it("should consume fresh nonce once and reject replays within expiration window", async () => {
       const { consumeResetNonce, resetResetNoncesMemory } = await import("../src/lib/tenantAuth");

@@ -57,9 +57,9 @@ The repository is organized as a clean enterprise monorepo:
 | :--- | :--- |
 | `backend/contracts/PharmaTree.sol` | Core smart contract: RBAC, hierarchy, ownership, two-party transfers, fractional sales, and ERC-2771 context |
 | `backend/contracts/PharmaTreeForwarder.sol` | OpenZeppelin ERC2771Forwarder enabling gasless EIP-712 meta-transactions |
-| `backend/scripts/` | Sepolia and local Hardhat deployment, role granting, and verification workflows |
-| `backend/scripts/e2e-sepolia-validation.ts` | Live Sepolia smoke test validating 8 core invariants against pre-seeded testnet fixtures #1-#10 |
-| `backend/test/PharmaTree.test.ts` | Chai/Mocha smart contract unit test suite with Hardhat snapshot fixtures (25 tests) |
+| `backend/scripts/` | Sepolia and local Hardhat deployment, role granting, canonical deployment manifests (`deployments/sepolia.json`), and verification workflows |
+| `backend/scripts/e2e-sepolia-validation.ts` | Live Sepolia smoke test validating 10 core invariants (including Scheme 1 HMAC seals and Dispenser/QA role segregation) against pre-seeded testnet fixtures #1-#10 |
+| `backend/test/PharmaTree.test.ts` | Chai/Mocha smart contract unit test suite: RBAC role segregation (`DISPENSER_ROLE`, `QA_ROLE`), administrative role revocation, unguessable serialHash enforcement, expiration checks, and batch recall freeze (30 tests) |
 | `backend/test/PosInvariants.test.ts` | Operational supply chain invariants, randomized property tests for $\Sigma Q$ conservation, and 5-tier evaluator (15 tests) |
 | `backend/test/Gs1AndSeals.test.ts` | GS1 Digital Link standard, GTIN-14 Luhn Mod 10, DataMatrix, and dual-scheme cryptographic seal tests (16 tests) |
 | `backend/test/Eip712Forwarder.test.ts` | EIP-712 typed meta-transactions, ERC-2771 forwarder verification, and relayer role decoupling (7 tests) |
@@ -158,8 +158,8 @@ stateDiagram-v2
     PendingTransfer --> Active: acceptTransfer (Receiver takes custody)
     PendingTransfer --> Rejected: rejectTransfer (Receiver flags damage/breach)
     PendingTransfer --> Active: cancelTransfer (Sender cancels prior to acceptance)
-    Rejected --> Active: reclaimRejectedUnit (Sender reclaims after inspection)
-    Active --> Sold: markAsSold / sellQuantity (Terminal Sale)
+    Rejected --> Active: clearRejected (QA clears quarantine with evidenceHash)
+    Active --> Sold: markAsSold / sellQuantity (Terminal Dispensing)
     Sold --> [*]
 ```
 
@@ -168,8 +168,8 @@ stateDiagram-v2
 2. **`acceptTransfer`**: Only callable by designated `pendingReceiver`. Sets `currentOwner = _msgSender()`, clears `pendingReceiver = address(0)`, and returns unit to `Status.Active`.
 3. **`rejectTransfer`**: Only callable by designated `pendingReceiver`. Sets `status = Status.Rejected` and clears `pendingReceiver = address(0)`. Ownership remains with the sender.
 4. **`cancelTransfer`**: Only callable by `currentOwner` while unit is `Status.PendingTransfer`. Clears `pendingReceiver` and returns unit to `Status.Active`.
-5. **`reclaimRejectedUnit`**: Only callable by `currentOwner` on a `Status.Rejected` unit. Moves unit from `Rejected` back to `Active` after formal inspection.
-6. **`markAsSold` / `sellQuantity`**: Only callable by `currentOwner` on an `Active` unit. Sets `Status.Sold`. Terminal state: sold units cannot be transferred or sold again.
+5. **`clearRejected`**: Only callable by an authorized QA auditor holding `QA_ROLE`. Verifies quarantine inspection on a `Status.Rejected` unit and requires a non-zero `bytes32 _evidenceHash` before returning the unit from `Rejected` back to `Active`, emitting `RejectedCleared`. Unprivileged senders cannot unilaterally reclaim rejected units.
+6. **`markAsSold` / `sellQuantity`**: Only callable by `currentOwner` holding `DISPENSER_ROLE` on an `Active` unit. Governed by the `dispensable` modifier, which strictly blocks dispensing if the batch root has been recalled (`recalledRoots[rootId]`) or if the unit is expired (`expiry > 0 && block.timestamp > expiry`). Sets `Status.Sold`. Terminal state: sold units cannot be transferred or sold again. If any handler or dispenser has their role revoked, all subsequent transfer and sale attempts revert, freezing inventory immediately on-chain.
 
 ### 4.2 Exact Mathematical Mass Conservation Theorem
 
@@ -298,8 +298,21 @@ To operate securely as a multi-tenant SaaS while protecting the relayer from gas
 - The raw key is hashed using SHA-256 and matched against authorized records in Neon table `tenants` or `PHARMA_TENANTS_CONFIG` using constant-time comparison.
 - **Tier Quota Matrix**:
   - `sandbox` / `demo-public-sandbox`: 10 tx/day (partitioned per client IP to prevent evaluation starvation).
-  - `standard`: 100 tx/day.
+  - `starter` / `standard`: 100 tx/day.
   - `enterprise`: 1,000 tx/day.
+- **Fail-Closed Quota Enforcement**: Unrecognized or missing tier configurations map strictly to `null`, causing the authentication layer to fail closed (`allowed: false`) with HTTP 403.
+- **Reverse Proxy IP Trust & IPv6 Subnet Bucketing**:
+  - Evaluated via `TRUSTED_PROXY` (`vercel`, `cloudflare`, or `disabled`).
+  - When behind verified proxies, the true client IP is extracted from proxy headers (`x-vercel-forwarded-for` or `cf-connecting-ip`).
+  - Direct unverified `x-forwarded-for` header spoofing is rejected.
+  - IPv6 client addresses are normalized to their canonical `/64` routing prefix, neutralizing IPv6 rotation attacks against rate limiters.
+- **Tenant-Scoped Idempotency & Partial Sales**:
+  - POS dispensing requests scope idempotency keys per tenant: `${tenant.id}:${idempotencyKey}`.
+  - Detects payload collisions: re-submitting an existing idempotency key with conflicting `unitId` or `quantity` returns HTTP 422 `IDEMPOTENCY_KEY_PAYLOAD_MISMATCH`.
+  - Transaction receipts are parsed on partial sales to extract `soldUnitId` of newly detached child units, returning it to POS for patient QR label generation.
+- **Demo Sandbox Gating**:
+  - Keyless demonstration access in `/api/pos/sell` and `/api/pos/incident` requires `DEMO_SANDBOX_ENABLED=true`.
+  - In production and staging environments without this flag, unauthenticated requests are refused.
 - **Rate Headers**:
   - `X-Tenant-ID`: Identifies active tenant context.
   - `X-Tenant-Tier`: Returns tenant tier.
@@ -404,6 +417,11 @@ DATABASE_URL=postgresql://user:password@endpoint.neon.tech/neondb?sslmode=requir
 # Cryptographic Pepper for Tamper Seal HMAC
 SEAL_PEPPER=your-high-entropy-server-seal-pepper-secret
 
+# Security Policies & Operational Toggles
+TRUSTED_PROXY=vercel               # vercel | cloudflare | disabled
+DEMO_SANDBOX_ENABLED=false         # true enables keyless staging POS sell/incident
+ALLOW_LEGACY_SEALS=false           # true permits Scheme 0 4-digit PINs (deprecated)
+
 # Distributed Rate Limiting (Upstash Redis)
 UPSTASH_REDIS_REST_URL=https://your-upstash-redis-endpoint.upstash.io
 UPSTASH_REDIS_REST_TOKEN=your_upstash_rest_token
@@ -442,16 +460,16 @@ npm run dev
 
 ## 15. Automated Testing & Invariant Validation
 
-The monorepo features **107 passing automated tests** across 10 test suites (65 Hardhat contract & invariant tests + 42 Vitest frontend API security & evaluator tests):
+The monorepo features **123 passing automated tests** across 10 test suites (70 Hardhat contract & invariant tests + 53 Vitest frontend API security & evaluator tests):
 
 ```bash
-# Run all smart contract, invariant, and GS1 tests (65 tests)
+# Run all smart contract, invariant, and GS1 tests (70 tests)
 npm test
 
-# Run frontend API security, tenant auth, and evaluator tests (42 tests)
+# Run frontend API security, tenant auth, and evaluator tests (53 tests)
 npm run test:frontend
 
-# Run full test suite across both packages
+# Run full test suite across both packages (123 tests)
 npm run test:all
 
 # Run linter and type-checking
@@ -480,10 +498,12 @@ File                      |  % Stmts | % Branch |  % Funcs |  % Lines |Uncovered
 | :--- | :---: | :--- | :--- |
 | **Hot Relayer Compromise** | Critical | Attacker extracts `RELAYER_PRIVATE_KEY` | **Zero Roles**: Relayer holds 0 contract roles. Cannot mint, alter roles, or sell third-party stock without signed EIP-712 forward requests. |
 | **Double-Dispensing Replay** | High | Photocopied QR sticker on counterfeit carton | **On-Chain Lifecycle & Tier 5**: Status locks to `Status.Sold`. Subsequent dispense attempts revert. Scratched tamper seal exposes reuse. |
-| **Custody Diversion & Theft** | High | Diverted inventory sold outside authorized channel | **Mutual Handshake (Tier 3)**: POS validates `unit.currentOwner == vendorAddress`. Incoming pending shipments display as in-transit. |
-| **Sequential ID Scanning** | Medium | Attacker guesses unsold IDs (1..N) to print fake stickers | **GS1 Unguessable Serials & Tier 5**: Digital Link encodes 128-bit random serial AI(21). Physical packaging requires intact scratch seal. |
+| **Custody Diversion & Theft** | High | Diverted inventory sold outside authorized channel | **Mutual Handshake & Dispenser RBAC**: POS validates `unit.currentOwner == vendorAddress` and requires `DISPENSER_ROLE`. Unprivileged handlers cannot dispense. |
+| **Sequential ID Scanning & Cloning** | High | Attacker guesses unsold IDs (1..N) to print fake stickers | **Unguessable Serials (`serialHash`)**: New mints require non-zero serial. Tested via off-chain `keccak256`. Missing/wrong serial returns uniform 404. |
+| **Compromised Insider Privileges** | High | Rogue distributor or pharmacy actor sells stolen/counterfeit stock | **Administrative Revocation**: Admins can immediately revoke `HANDLER_ROLE` or `DISPENSER_ROLE`, freezing all on-chain operations on the target's inventory. |
+| **Contaminated Stock Reclamation** | Medium | Sender un-rejects recalled or rejected shipment | **QA Quarantine Gate**: Sender cannot self-reclaim. Only authorized `QA_ROLE` can call `clearRejected(id, evidenceHash)` with immutable event trail. |
 | **Phishing / Lookalike Domains**| Medium | Counterfeiter prints QR pointing to fake verify domain | **Direct POS App Ingestion & DNSSEC**: POS scanners bypass QR hostnames to query pre-configured APIs. Web portal secured via DNSSEC and TLS. |
-| **Gasless Relayer DoS** | Medium | Malicious client exhausts relayer native gas | **Tiered Daily Quotas**: Strict per-tenant and per-IP sub-limits, Upstash sliding-window rate limit, and 0.001 ETH balance circuit breaker. |
+| **Gasless Relayer DoS** | Medium | Malicious client exhausts relayer native gas | **Tiered Daily Quotas**: Strict per-tenant and per-IP sub-limits, Upstash sliding-window rate limit, IPv6 /64 bucketing, and 0.001 ETH balance circuit breaker. |
 | **Lockout Reset Signature Replay** | Low | Replay of manufacturer unlock signature in 10m window | **Atomic Single-Use Nonces**: Challenges bind `(unitId, RESET_SEAL, nonce, timestamp)`. Nonces consumed in `used_reset_nonces`. |
 | **Physical Pill Substitution** | Inherent | Counterfeiter opens authentic box, swaps pills, reseals | **Scratch-Off Tamper Seals**: Concealed 12-char Crockford secret destroyed upon initial unboxing; cannot be reconstructed once scratched. |
 

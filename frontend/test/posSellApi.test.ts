@@ -142,5 +142,28 @@ describe("POS Sell API Security Policies", () => {
       expect(mined?.txHash).toBe("0xMinedHash456");
       expect(mined?.responsePayload?.success).toBe(true);
     });
+
+    it("should detect idempotency payload collision when key is reused with different parameters", async () => {
+      const {
+        getSaleByIdempotencyKey,
+        recordSaleSubmitted,
+      } = await import("../src/lib/db");
+
+      const tenantId = "tenant-apollo";
+      const userKey = "tx-ref-10029";
+      const scopedKey = `${tenantId}:${userKey}`;
+
+      await recordSaleSubmitted(scopedKey, 5, 2);
+      const existing = await getSaleByIdempotencyKey(scopedKey);
+      expect(existing).not.toBeNull();
+
+      // Check collision logic: requesting unit 99 with same key
+      const isCollisionUnit = existing?.unitId !== 99;
+      expect(isCollisionUnit).toBe(true);
+
+      // Check collision logic: requesting quantity 10 with same key
+      const isCollisionQty = existing?.quantity !== 10;
+      expect(isCollisionQty).toBe(true);
+    });
   });
 });

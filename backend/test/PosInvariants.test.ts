@@ -207,7 +207,7 @@ describe("PharmaTree POS & Supply Chain Invariants", function () {
 
   describe("Invariant 8: Randomized Property Test (ΣQ Global Mass Conservation)", function () {
     it("Should strictly conserve ΣQ across 35 randomized supply-chain operations", async function () {
-      const { pharmaTree, manufacturer, distributor1, distributor2, pharmacy } =
+      const { pharmaTree, admin, manufacturer, distributor1, distributor2, pharmacy } =
         await loadFixture(deployPharmaTreeFixture);
 
       // 1. Setup 3 initial root batches
@@ -306,9 +306,10 @@ describe("PharmaTree POS & Supply Chain Invariants", function () {
                 await pharmaTree.connect(receiverSigner).rejectTransfer(targetId);
               }
             }
-          } else if (unit.status === Number(Status.Rejected) && ownerSigner) {
-            // Reclaim
-            await pharmaTree.connect(ownerSigner).reclaimRejectedUnit(targetId);
+          } else if (unit.status === Number(Status.Rejected)) {
+            // Authorized QA clears rejection with evidence hash
+            const evidence = ethers.keccak256(ethers.toUtf8Bytes(`qa-audit-${targetId}-${step}`));
+            await pharmaTree.connect(admin).clearRejected(targetId, evidence);
           }
         } catch {
           // Expected business logic guards in random execution

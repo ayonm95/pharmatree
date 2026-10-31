@@ -13,8 +13,17 @@ async function main() {
   const provider = ethers.provider;
   const deployer = new ethers.Wallet(manufacturerKey, provider);
 
+  let forwarderAddress = process.env.TRUSTED_FORWARDER || process.env.NEXT_PUBLIC_TRUSTED_FORWARDER;
+  if (!forwarderAddress || forwarderAddress === ethers.ZeroAddress) {
+    const ForwarderFactory = await ethers.getContractFactory("PharmaTreeForwarder", deployer);
+    const forwarder = await ForwarderFactory.deploy("PharmaTreeForwarder");
+    await forwarder.waitForDeployment();
+    forwarderAddress = await forwarder.getAddress();
+    console.log(`PharmaTreeForwarder deployed to: ${forwarderAddress}`);
+  }
+
   const PharmaTree = await ethers.getContractFactory("PharmaTree");
-  const pharmaTree = await PharmaTree.connect(deployer).deploy();
+  const pharmaTree = await PharmaTree.connect(deployer).deploy(forwarderAddress);
   await pharmaTree.waitForDeployment();
 
   const contractAddress = await pharmaTree.getAddress();

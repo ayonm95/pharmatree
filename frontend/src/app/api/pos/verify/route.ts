@@ -54,6 +54,7 @@ export async function POST(req: NextRequest) {
     const rawVendor = typeof body.vendorAddress === "string" ? body.vendorAddress.trim() : "";
     const vendorAddress = isValidEthAddress(rawVendor) ? rawVendor.toLowerCase() : undefined;
     const scratchSecret = sanitizeInputString(body.scratchSecret || "", 32);
+    const rawSerial = typeof body.serial === "string" ? body.serial.trim() : undefined;
 
     if (!unitId) {
       return NextResponse.json(
@@ -85,7 +86,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Check if ID is out of bounds
+    // Check if ID is out of bounds (uniform 404 response)
     if (BigInt(unitId) > totalUnits) {
       let scanRec: any = null;
       try {
@@ -94,21 +95,15 @@ export async function POST(req: NextRequest) {
         console.warn("Scan telemetry error for unregistered unit:", scanErr);
       }
 
-      const evalResult = evaluateTiers({
-        unitId,
-        totalUnitsOnChain: totalUnits,
-        unit: null,
-      });
-
       return NextResponse.json(
         {
           authentic: false,
-          tierFailed: evalResult.tierFailed,
-          reason: evalResult.reason,
-          message: evalResult.message,
+          tierFailed: 1,
+          reason: "UNIT_NOT_FOUND",
+          message: `Unit details could not be retrieved for Unit #${unitId}.`,
           scanRecord: scanRec,
         },
-        { headers: rateHeaders }
+        { status: 404, headers: rateHeaders }
       );
     }
 
@@ -130,6 +125,14 @@ export async function POST(req: NextRequest) {
     const status = Number(unitData.status);
     const quantity = unitData.quantity.toString();
     const metadata = unitData.metadata;
+    const serialHash = unitData.serialHash ? String(unitData.serialHash) : undefined;
+    const expiry = unitData.expiry !== undefined ? Number(unitData.expiry) : 0;
+
+    let isRecalled = false;
+    try {
+      const rId = rootId === "0" ? unitId : Number(rootId);
+      isRecalled = await contract.recalledRoots(rId);
+    } catch {}
 
     const levelName = unitLevelToName(level);
     const statusName = unitStatusToName(status);
@@ -144,6 +147,9 @@ export async function POST(req: NextRequest) {
       status,
       quantity,
       metadata,
+      serialHash,
+      expiry,
+      isRecalled,
     };
 
     // 3. Scratch Seal Evaluation
@@ -170,6 +176,7 @@ export async function POST(req: NextRequest) {
     const evalResult = evaluateTiers({
       unitId,
       totalUnitsOnChain: totalUnits,
+      serial: rawSerial,
       unit: unitObj,
       vendorAddress,
       scratchSecret,
@@ -182,6 +189,20 @@ export async function POST(req: NextRequest) {
           }
         : null,
     });
+
+    // Uniform 404 for missing unit or wrong/missing serial on serialized units
+    if (evalResult.reason === "UNIT_NOT_FOUND") {
+      return NextResponse.json(
+        {
+          authentic: false,
+          tierFailed: 1,
+          reason: "UNIT_NOT_FOUND",
+          message: `Unit details could not be retrieved for Unit #${unitId}.`,
+          scanRecord: scanRec,
+        },
+        { status: 404, headers: rateHeaders }
+      );
+    }
 
     if (!evalResult.authentic) {
       return NextResponse.json(

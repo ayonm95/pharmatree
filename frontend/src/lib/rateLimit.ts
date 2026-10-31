@@ -238,21 +238,12 @@ export function getRateLimitHeaders(res: RateLimitResult): Record<string, string
 }
 
 /**
- * Sanitizes generic user input to prevent XSS, HTML injection, and control characters
+ * Sanitizes user input string: strips non-printable ASCII control characters, trims whitespace, and limits length.
+ * Does not entity-encode characters to avoid corrupting cryptographic tokens, hashes, and secrets.
  */
 export function sanitizeInputString(raw: unknown, maxLength = 256): string {
   if (typeof raw !== "string") return "";
   return raw
-    .replace(/[<>'"&]/g, (char) => {
-      switch (char) {
-        case "<": return "&lt;";
-        case ">": return "&gt;";
-        case "'": return "&#39;";
-        case '"': return "&quot;";
-        case "&": return "&amp;";
-        default: return char;
-      }
-    })
     .replace(/[\x00-\x1F\x7F]/g, "") // Strip control characters
     .trim()
     .slice(0, maxLength);

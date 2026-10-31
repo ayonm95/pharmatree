@@ -148,13 +148,37 @@ async function main() {
   }
 
   const result = {
-    contractAddress,
+    network: "sepolia",
+    chainId: 11155111,
+    contracts: {
+      PharmaTree: {
+        address: contractAddress,
+        deploymentBlock: deploymentReceipt?.blockNumber,
+      },
+      PharmaTreeForwarder: {
+        address: forwarderAddress,
+      },
+    },
     deployer: deployer.address,
     manufacturer: targetManufacturer,
-    deploymentBlock: deploymentReceipt?.blockNumber,
     roleTxHash,
-    network: (await ethers.provider.getNetwork()).chainId.toString(),
+    deployedAt: new Date().toISOString(),
   };
+
+  const deploymentJsonPaths = [
+    path.resolve(__dirname, "../deployments/sepolia.json"),
+    path.resolve(__dirname, "../../deployments/sepolia.json"),
+  ];
+
+  for (const p of deploymentJsonPaths) {
+    try {
+      await fs.mkdir(path.dirname(p), { recursive: true });
+      await fs.writeFile(p, JSON.stringify(result, null, 2), "utf8");
+      console.log(`Saved deployment manifest to: ${p}`);
+    } catch (dErr) {
+      console.warn(`Could not save deployment manifest to ${p}:`, dErr);
+    }
+  }
 
   console.log("\n--- DEPLOYMENT SUCCESSFUL ---");
   console.log(JSON.stringify(result, null, 2));

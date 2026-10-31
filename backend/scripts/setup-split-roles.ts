@@ -43,17 +43,23 @@ async function main() {
   const adminRole = await contract.DEFAULT_ADMIN_ROLE();
   const mfrRole = await contract.MANUFACTURER_ROLE();
   const handlerRole = await contract.HANDLER_ROLE();
+  const dispenserRole = await contract.DISPENSER_ROLE();
+  const qaRole = await contract.QA_ROLE();
 
   const hasAdmin = await contract.hasRole(adminRole, relayerWallet.address);
   const hasMfr = await contract.hasRole(mfrRole, relayerWallet.address);
   const hasHandler = await contract.hasRole(handlerRole, relayerWallet.address);
+  const hasDispenser = await contract.hasRole(dispenserRole, relayerWallet.address);
+  const hasQA = await contract.hasRole(qaRole, relayerWallet.address);
 
   console.log(`\n--- Verification of Relayer Role Isolation ---`);
   console.log(`Relayer has DEFAULT_ADMIN_ROLE: ${hasAdmin}`);
   console.log(`Relayer has MANUFACTURER_ROLE:  ${hasMfr}`);
   console.log(`Relayer has HANDLER_ROLE:       ${hasHandler}`);
+  console.log(`Relayer has DISPENSER_ROLE:     ${hasDispenser}`);
+  console.log(`Relayer has QA_ROLE:            ${hasQA}`);
 
-  if (hasAdmin || hasMfr || hasHandler) {
+  if (hasAdmin || hasMfr || hasHandler || hasDispenser || hasQA) {
     throw new Error("SECURITY FAULT: Relayer holds an on-chain role!");
   }
   console.log(`✅ CONFIRMED: Relayer holds ZERO roles on PharmaTree.sol`);

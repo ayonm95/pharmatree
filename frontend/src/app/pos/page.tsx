@@ -121,6 +121,8 @@ export default function VendorPosPage() {
     txHash: string;
     dispensedQty: number;
     remainingQty: number;
+    soldUnitId?: number;
+    isFractional?: boolean;
   } | null>(null);
   const [incidentLoggedId, setIncidentLoggedId] = useState<string | null>(null);
   const [tenantInfo, setTenantInfo] = useState<{ id: string; tier: string; quotaRemaining?: number } | null>(null);
@@ -377,10 +379,16 @@ export default function VendorPosPage() {
         if (soundEnabled) playDispensedSuccess();
         triggerHaptic([100, 50, 150]);
 
+        const totalAvail = Number(currentVerification.unit.quantity);
+        const soldUnitId = data.soldUnitId || data.unitId || unitId;
+        const isFractional = data.isFractional || dispenseQty < totalAvail;
+
         setDispenseResult({
           txHash: data.txHash,
-          dispensedQty: data.dispensedQuantity,
-          remainingQty: data.remainingQuantity,
+          dispensedQty: data.dispensedQuantity || dispenseQty,
+          remainingQty: data.remainingQuantity ?? (totalAvail - dispenseQty),
+          soldUnitId,
+          isFractional,
         });
 
         setCurrentVerification((prev) => {
@@ -431,6 +439,8 @@ export default function VendorPosPage() {
           txHash: tx.hash,
           dispensedQty: dispenseQty,
           remainingQty: totalAvail - dispenseQty,
+          soldUnitId: unitId,
+          isFractional: dispenseQty < totalAvail,
         });
       } else {
         if (data.error === "DEMO_QUOTA_EXCEEDED") {
@@ -1558,24 +1568,52 @@ export default function VendorPosPage() {
                                 <CheckCircle2 size={16} /> Dispensing Confirmed On-Chain!
                               </div>
                               <p style={{ margin: "4px 0 8px", fontSize: "var(--text-xs)", color: "var(--color-text-muted)" }}>
-                                Successfully sold {dispenseResult.dispensedQty} unit(s). Remaining stock on-chain: <strong>{dispenseResult.remainingQty}</strong>.
+                                {dispenseResult.isFractional ? (
+                                  <>
+                                    Dispensed portion: <strong>{dispenseResult.dispensedQty}</strong> unit(s) (Child Unit #{dispenseResult.soldUnitId || "Created"}). Remaining parent stock on-chain: <strong>{dispenseResult.remainingQty}</strong> units.
+                                  </>
+                                ) : (
+                                  <>
+                                    Successfully sold {dispenseResult.dispensedQty} unit(s). Remaining stock on-chain: <strong>{dispenseResult.remainingQty}</strong>.
+                                  </>
+                                )}
                               </p>
-                              <a
-                                href={`https://sepolia.etherscan.io/tx/${dispenseResult.txHash}`}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                style={{
-                                  color: "var(--color-primary)",
-                                  fontSize: "var(--text-xs)",
-                                  display: "inline-flex",
-                                  alignItems: "center",
-                                  gap: "4px",
-                                  textDecoration: "none",
-                                  fontWeight: 600,
-                                }}
-                              >
-                                View Sepolia Etherscan Receipt <ExternalLink size={12} />
-                              </a>
+                              <div style={{ display: "flex", gap: "var(--space-3)", alignItems: "center", flexWrap: "wrap", marginTop: "var(--space-2)" }}>
+                                <a
+                                  href={`https://sepolia.etherscan.io/tx/${dispenseResult.txHash}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  style={{
+                                    color: "var(--color-primary)",
+                                    fontSize: "var(--text-xs)",
+                                    display: "inline-flex",
+                                    alignItems: "center",
+                                    gap: "4px",
+                                    textDecoration: "none",
+                                    fontWeight: 600,
+                                  }}
+                                >
+                                  View Sepolia Etherscan Receipt <ExternalLink size={12} />
+                                </a>
+
+                                {dispenseResult.soldUnitId && (
+                                  <Link
+                                    href={`/verify?unitId=${dispenseResult.soldUnitId}`}
+                                    target="_blank"
+                                    style={{
+                                      color: "var(--color-primary)",
+                                      fontSize: "var(--text-xs)",
+                                      display: "inline-flex",
+                                      alignItems: "center",
+                                      gap: "4px",
+                                      textDecoration: "none",
+                                      fontWeight: 600,
+                                    }}
+                                  >
+                                    View Patient QR Label (#{dispenseResult.soldUnitId}) <ExternalLink size={12} />
+                                  </Link>
+                                )}
+                              </div>
                             </div>
                           )}
                         </div>

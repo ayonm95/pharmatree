@@ -43,7 +43,17 @@ export function useWalletActions({
       try {
         setLoading(true);
         const metadata = `${name.trim()}, ${qtyNum} tablets`;
-        const tx = await contract.createRootUnit(0, metadata, qtyNum);
+        const randomEntropy = Math.random().toString(36).substring(2, 10).toUpperCase();
+        const autoSerial = `SN-${Date.now().toString(36).toUpperCase()}-${randomEntropy}`;
+        const autoExpiry = Math.floor(Date.now() / 1000) + 730 * 86400; // 2 years default shelf life
+
+        let tx;
+        try {
+          tx = await contract.createRootUnitWithSerial(0, metadata, qtyNum, autoSerial, autoExpiry);
+        } catch {
+          // Fallback for legacy ABI compatibility
+          tx = await contract.createRootUnit(0, metadata, qtyNum);
+        }
         await tx.wait();
         notify(`Medicine batch registered: ${name} (${qtyNum} units).`, "success");
         await refreshData(account, contract);
@@ -234,20 +244,31 @@ export function useWalletActions({
       if (!contract || !account) return;
       try {
         setLoading(true);
-        const tx = await contract.reclaimRejectedUnit(Number(unitId));
-        await tx.wait();
-        notify("Rejected unit reclaimed and restored to Active stock.", "success");
+        if (typeof contract.clearRejected === "function") {
+          const evidenceHash = ethers.keccak256(ethers.toUtf8Bytes(`qa-release-audit-${unitId}-${Date.now()}`));
+          const tx = await contract.clearRejected(Number(unitId), evidenceHash);
+          await tx.wait();
+          notify("Quarantined unit cleared by QA audit and restored to Active stock.", "success");
+        } else if (typeof contract.reclaimRejectedUnit === "function") {
+          const tx = await contract.reclaimRejectedUnit(Number(unitId));
+          await tx.wait();
+          notify("Rejected unit reclaimed and restored to Active stock.", "success");
+        } else {
+          notify("Quarantine clearance not supported by connected contract.", "error");
+        }
         await refreshData(account, contract);
       } catch (err: any) {
         console.error("reclaimUnit error:", err);
         const reason = err?.reason || err?.message || "";
-        if (reason.includes("missing revert data") || reason.includes("CALL_EXCEPTION") || reason.includes("reclaimRejectedUnit")) {
+        if (reason.includes("Only authorized QA") || reason.includes("onlyQA")) {
+          notify("Authorization Error: Only an authorized QA auditor (QA_ROLE) can clear quarantined units.", "error");
+        } else if (reason.includes("missing revert data") || reason.includes("CALL_EXCEPTION") || reason.includes("reclaimRejectedUnit")) {
           notify(
-            "Contract Notice: The connected contract does not support reclaiming. Rejected units remain permanently archived as Rejected on-chain.",
+            "Contract Notice: Quarantined units require QA role authorization to clear on-chain.",
             "error"
           );
         } else {
-          notify("Failed to reclaim rejected unit: " + (err?.shortMessage || err?.message || "Transaction reverted"), "error");
+          notify("Failed to clear quarantined unit: " + (err?.shortMessage || err?.message || "Transaction reverted"), "error");
         }
       } finally {
         setLoading(false);

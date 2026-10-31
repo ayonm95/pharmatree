@@ -17,15 +17,15 @@
 
 ## 🌟 Key Capabilities
 
-- **Role-Based Access Control (RBAC)**: On-chain authorization for **Admin**, **Manufacturer**, and **Handler** (Distributor, Wholesaler, Hospital, Pharmacy) roles.
+- **Role-Based Access Control (RBAC)**: On-chain authorization for **Admin**, **Manufacturer**, **Handler** (Distributor, Wholesaler), **Dispenser** (Hospital, Pharmacy), and **QA Auditor** roles. Compromised entities can be revoked immediately, permanently freezing their on-chain custody and dispensing privileges.
 - **Hierarchical Lineage Tracking**: Models pharmaceutical packaging hierarchy:
   $$\text{Container} \longrightarrow \text{Shipment} \longrightarrow \text{Batch} \longrightarrow \text{Box} \longrightarrow \text{Individual Item}$$
-- **Two-Party Custody Handshake & Audit Trail**: Inbound shipments require mutual acceptance by the authorized recipient. Receivers can reject damaged or compromised shipments, allowing the sender to inspect and reclaim custody on-chain (`reclaimRejectedUnit`) while recording an immutable audit trail (`TransferRejected`).
+- **Two-Party Custody Handshake & Audit Trail**: Inbound shipments require mutual acceptance by the authorized recipient. Receivers can reject damaged or compromised shipments, recording an immutable audit trail (`TransferRejected`). Quarantined stock can only be cleared back to active status through verifiable QA audit clearance (`clearRejected(unitId, evidenceHash)`).
 - **Inventory Partitioning**: Supports fractional custody transfers (`initiatePartialTransfer`) and partial retail dispensing (`sellQuantity`), preserving sender remainders while detaching new child units.
-- **Vendor POS Scanner Terminal (`/pos`)**: High-throughput kiosk scanner for retail dispensaries. Features rapid keyboard checkout (`Spacebar` / `Enter`), collapsible tamper-seal inspection, dual camera/USB-wedge barcode listeners, gasless relayer execution, Web Audio feedback, and quarantine incident telemetry.
-- **Role-Adaptive Verification Portal (`/verify`)**: 4-Stage visual supply chain journey stepper (`Genesis` -> `Handshakes` -> `POS` -> `Patient Verification`). Connected handlers can accept/reject shipments in 1 click; consumers receive clear, nuanced guidance distinguishing legitimate prescription rescans from potential tampering.
+- **Vendor POS Scanner Terminal (`/pos`)**: High-throughput kiosk scanner for retail dispensaries. Features rapid keyboard checkout (`Spacebar` / `Enter`), collapsible tamper-seal inspection, dual camera/USB-wedge barcode listeners, gasless relayer execution, Web Audio feedback, child unit QR label emission for partial sales, and quarantine incident telemetry.
+- **Role-Adaptive Verification Portal (`/verify`)**: 4-Stage visual supply chain journey stepper (`Genesis` -> `Handshakes` -> `POS` -> `Patient Verification`). Connected handlers can accept/reject shipments in 1 click; consumers receive clear guidance driven by physical scratch-off tamper seal verification, distinguishing legitimate prescription rescans from potential cloning.
 - **GS1 Digital Link Compliance**: Formats and parses standard GS1 URIs (`/01/{GTIN}/10/{Lot}/21/{Serial}`), Modulo 10 Luhn check digits, ASCII `\x1d` element strings, and 2D GS1 DataMatrix barcodes.
-- **Tamper-Evident Physical Seals (Tier 5)**: Combines public packaging QRs with concealed scratch-off Crockford Base32 HMAC secrets to prevent visual photo-cloning.
+- **Tamper-Evident Physical Seals (Tier 5)**: Combines public packaging QRs with concealed scratch-off Crockford Base32 HMAC secrets to prevent visual photo-cloning. Unguessable serial numbers are verified off-chain via `keccak256` hashes, returning uniform 404 responses to eliminate valid unit enumeration.
 
 ---
 
@@ -99,8 +99,8 @@ flowchart TD
 | Role | Address | Description |
 | :--- | :--- | :--- |
 | **Admin & Manufacturer** | `0x65371f0ddFa0AD6e7655243cD2A2567328EA1537` | Deploys contracts, creates batches, administers roles |
-| **Primary Handler** | `0x1589df48e9F04926E260Bf813c42dFb4a71893A3` | Authorized distributor / hospital dispensary |
-| **Secondary Handler** | `0xe88a5608B536BCc9d557823234BacA9a00F2540B` | Secondary pharmacy / retail endpoint |
+| **Primary Handler & Dispenser** | `0x1589df48e9F04926E260Bf813c42dFb4a71893A3` | Authorized distributor / hospital dispensary (`HANDLER_ROLE` + `DISPENSER_ROLE`) |
+| **Secondary Handler & QA** | `0xe88a5608B536BCc9d557823234BacA9a00F2540B` | Secondary pharmacy / retail endpoint / QA auditor (`HANDLER_ROLE` + `QA_ROLE`) |
 
 ---
 
@@ -146,6 +146,9 @@ Ensure the following variables are configured:
 - `RELAYER_PRIVATE_KEY`: Private key for the unprivileged hot relayer.
 - `DATABASE_URL`: Connection string for Neon PostgreSQL.
 - `SEAL_PEPPER`: Secret cryptographic pepper for Tier 5 HMAC verifiers.
+- `TRUSTED_PROXY`: Reverse proxy trust mode (`vercel` for Vercel edge, `cloudflare`, or `disabled`).
+- `DEMO_SANDBOX_ENABLED`: Set to `true` only for staging sandboxes without tenant API keys.
+- `ALLOW_LEGACY_SEALS`: Set to `true` to accept Scheme 0 legacy 4-digit PINs (defaults to `false`).
 - `UPSTASH_REDIS_REST_URL`: (Optional) Distributed rate limiting.
 
 ### 3. Run Development Server
@@ -161,18 +164,18 @@ npm run dev
 
 ---
 
-## 🧪 Testing & Validation (107 Automated Tests)
+## 🧪 Testing & Validation (123 Automated Tests)
 
-The monorepo maintains **107 automated tests passing** across 10 test suites (65 Hardhat contract & invariant tests + 42 Vitest frontend API security & evaluator tests):
+The monorepo maintains **123 automated tests passing** across 10 test suites (70 Hardhat contract & invariant tests + 53 Vitest frontend API security & evaluator tests):
 
 ```bash
-# Run all smart contract, invariant, and GS1 tests (65 tests)
+# Run all smart contract, invariant, and GS1 tests (70 tests)
 npm test
 
-# Run frontend API security, tenant auth, and evaluator tests (42 tests)
+# Run frontend API security, tenant auth, and evaluator tests (53 tests)
 npm run test:frontend
 
-# Run full test suite across both packages
+# Run full test suite across both packages (123 tests)
 npm run test:all
 
 # Run linter and type-checking

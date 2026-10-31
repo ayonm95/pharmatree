@@ -378,6 +378,18 @@ describe("PharmaTree Smart Contract", function () {
     it("Should verify serial numbers against stored serialHash and prevent cloned QR codes", async function () {
       const serial = "SN-2026-XYZ-998877";
       const pastExpiry = 0;
+
+      // Revert on empty serial for new mints
+      await expect(
+        pharmaTree.connect(manufacturer).createRootUnitWithSerial(
+          UnitLevel.Box,
+          "Box with Empty Serial",
+          10,
+          "",
+          0
+        )
+      ).to.be.revertedWith("Serial number required for new mints");
+
       await pharmaTree.connect(manufacturer).createRootUnitWithSerial(
         UnitLevel.Box,
         "Box with Secure Serial",

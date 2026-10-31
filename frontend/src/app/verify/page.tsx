@@ -52,6 +52,9 @@ type UnitRecord = {
   status: number;
   quantity: string;
   metadata: string;
+  serialHash?: string;
+  expiry?: number;
+  isRecalled?: boolean;
 };
 
 type TimelineEvent = {
@@ -85,6 +88,12 @@ function VerifyContent() {
   const [scanData, setScanData] = useState<ScanRecord | null>(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Scratch seal verification state
+  const [scratchInput, setScratchInput] = useState("");
+  const [sealStatus, setSealStatus] = useState<"unverified" | "verified" | "consumed" | "invalid" | "locked">("unverified");
+  const [sealMessage, setSealMessage] = useState<string | null>(null);
+  const [sealVerifying, setSealVerifying] = useState(false);
 
   // Role-adaptive wallet & sound state
   const [account, setAccount] = useState<string | null>(null);
@@ -208,6 +217,13 @@ function VerifyContent() {
           const scanJson = await scanRes.json();
           if (!cancelled && scanJson.scanCount) {
             setScanData(scanJson);
+            if (scanJson.seal) {
+              if (scanJson.seal.state === "VERIFIED" || scanJson.seal.consumedAt) {
+                setSealStatus("consumed");
+              } else if (scanJson.seal.state === "LOCKED_REVIEW") {
+                setSealStatus("locked");
+              }
+            }
           }
         }
       } catch (scanErr) {
@@ -224,6 +240,36 @@ function VerifyContent() {
         const detail = await contract.getUnitDetails(idBigInt);
         if (cancelled) return;
 
+        const onChainSerialHash = detail[9] ? String(detail[9]) : undefined;
+        const onChainExpiry = detail[10] ? Number(detail[10]) : 0;
+        const serialParam = searchParams.get("serial");
+
+        // Uniform 404 anti-cloning defense: If unit has a registered serialHash, require correct matching serial
+        if (
+          onChainSerialHash &&
+          onChainSerialHash !== ethers.ZeroHash &&
+          onChainSerialHash !== "0x0000000000000000000000000000000000000000000000000000000000000000"
+        ) {
+          const isSerialValid =
+            typeof serialParam === "string" &&
+            serialParam.length > 0 &&
+            ethers.keccak256(ethers.toUtf8Bytes(serialParam)) === onChainSerialHash;
+
+          if (!isSerialValid) {
+            setError(`Unit #${activeUnitId} was not found on the blockchain.`);
+            setUnit(null);
+            setLoading(false);
+            return;
+          }
+        }
+
+        // Check recall status on root
+        let isRecalled = false;
+        try {
+          const rootBigInt = detail[1] === BigInt(0) ? idBigInt : detail[1];
+          isRecalled = await contract.recalledRoots(rootBigInt);
+        } catch {}
+
         const loadedUnit: UnitRecord = {
           id: String(activeUnitId),
           parentId: String(detail[0]),
@@ -235,6 +281,9 @@ function VerifyContent() {
           status: Number(detail[6]),
           quantity: String(detail[7]),
           metadata: detail[8],
+          serialHash: onChainSerialHash,
+          expiry: onChainExpiry,
+          isRecalled,
         };
 
         // 2. Recursive Lineage Resolution: traverse up the parent tree
@@ -477,6 +526,54 @@ function VerifyContent() {
     }
   };
 
+  async function handleVerifySeal(e: React.FormEvent) {
+    e.preventDefault();
+    if (!scratchInput.trim() || !activeUnitId) return;
+    setSealVerifying(true);
+    setSealMessage(null);
+    try {
+      const serialParam = searchParams.get("serial") || undefined;
+      const res = await fetch("/api/pos/verify", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          unitId: Number(activeUnitId),
+          scratchSecret: scratchInput.trim(),
+          serial: serialParam,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        if (data.tamperSealStatus === "verified" || data.tamperSealStatus === "consumed") {
+          setSealStatus(data.tamperSealStatus);
+          setSealMessage("✓ Security scratch seal verified authentic against manufacturer cryptographic HMAC.");
+          if (soundEnabledRef.current) playBeepSuccess();
+        } else if (data.tamperSealStatus === "locked") {
+          setSealStatus("locked");
+          setSealMessage("Tamper seal is locked due to multiple failed verification attempts.");
+          if (soundEnabledRef.current) playSirenAlarm();
+        } else {
+          setSealStatus("invalid");
+          setSealMessage("Invalid scratch seal code. Packaging may be counterfeit or tampered.");
+          if (soundEnabledRef.current) playSirenAlarm();
+        }
+      } else {
+        if (data.reason === "UNIT_NOT_FOUND") {
+          setError(`Unit #${activeUnitId} was not found on the blockchain.`);
+        } else {
+          setSealStatus("invalid");
+          setSealMessage(data.message || "Failed to verify scratch seal.");
+        }
+        if (soundEnabledRef.current) playSirenAlarm();
+      }
+    } catch (err: any) {
+      setSealStatus("invalid");
+      setSealMessage(err.message || "Network error verifying scratch seal.");
+    } finally {
+      setSealVerifying(false);
+    }
+  }
+
   // Hierarchy top-to-bottom: [Container, Shipment, Batch, Box, IndividualItem]
   const hierarchy = [...lineage].reverse();
 
@@ -487,6 +584,10 @@ function VerifyContent() {
   const isPending = unit?.status === 1 || lineage.some((u) => u.status === 1);
   const isSold = unit?.status === 2;
   const isActive = unit?.status === 0;
+  const isRecalled = unit?.isRecalled === true;
+  const isExpired = Boolean(
+    unit?.expiry && unit.expiry > 0 && Math.floor(Date.now() / 1000) > unit.expiry
+  );
 
   let verdict = {
     title: "Verified Authentic Pharmaceutical",
@@ -495,7 +596,24 @@ function VerifyContent() {
     icon: CheckCircle2,
   };
 
-  if (isFlagged) {
+  if (isRecalled) {
+    verdict = {
+      title: "CRITICAL RECALL ALERT: Product Officially Recalled",
+      description: `Unit #${unit?.id} belongs to a batch that has been officially recalled by the manufacturer or QA authority. DO NOT CONSUME. Quarantined for return.`,
+      variant: "danger",
+      icon: XCircle,
+    };
+  } else if (isExpired) {
+    const expDate = unit?.expiry
+      ? new Date(unit.expiry * 1000).toISOString().split("T")[0]
+      : "Unknown";
+    verdict = {
+      title: "EXPIRY ALERT: Medication Past Safe Shelf Life",
+      description: `Unit #${unit?.id} expired on ${expDate}. This pharmaceutical has exceeded its authorized shelf life and must not be consumed.`,
+      variant: "danger",
+      icon: XCircle,
+    };
+  } else if (isFlagged) {
     verdict = {
       title: "DANGER: Custody Flagged / Transfer Rejected",
       description: isDirectlyRejected
@@ -512,26 +630,43 @@ function VerifyContent() {
       icon: AlertTriangle,
     };
   } else if (isSold) {
-    const isReplay = Boolean(scanData && scanData.scanCount > 1);
-    if (isReplay) {
+    if (sealStatus === "verified" || sealStatus === "consumed") {
       verdict = {
-        title: `⚠️ Dispensed Packaging Advisory: Repeat Scan (${scanData?.scanCount} Scans)`,
-        description: `This packaging was officially dispensed and sold on-chain. It has been scanned ${scanData?.scanCount} times. Repeat scans are common when reviewing dosage instructions or sharing with caregivers. If you are examining an unpurchased or unopened box, inspect the scratch-off tamper seal below or verify with your dispensing pharmacist.`,
-        variant: "warning",
-        icon: AlertTriangle,
-      };
-    } else {
-      verdict = {
-        title: "✅ Legitimate Purchase: Officially Dispensed & Sold",
-        description: `Cryptographically verified on Ethereum Sepolia. Legally dispensed to patient by authorized pharmacy ${unit ? formatAddress(unit.currentOwner) : ""}. You are inspecting the verified dispensed portion.`,
+        title: "✅ Seal Verified Genuine: Single-Use Dispensed Unit",
+        description: `Cryptographically verified on Ethereum Sepolia. Tamper seal secret matched manufacturer HMAC. Legally dispensed to patient by authorized pharmacy ${unit ? formatAddress(unit.currentOwner) : ""}.`,
         variant: "success",
         icon: CheckCircle2,
       };
+    } else if (sealStatus === "locked") {
+      verdict = {
+        title: "⚠️ Security Lockout: Tamper Seal Verification Locked",
+        description: "Multiple incorrect scratch-off attempts have temporarily locked verification for this unit. Do not consume. Contact your dispensing pharmacist immediately.",
+        variant: "danger",
+        icon: XCircle,
+      };
+    } else if (sealStatus === "invalid") {
+      verdict = {
+        title: "⚠️ Tamper Seal Mismatch: Potential Cloned Packaging",
+        description: "The entered scratch-off code does not match the manufacturer cryptographic HMAC verifier. The packaging may be counterfeit, photocopied, or tampered with.",
+        variant: "danger",
+        icon: XCircle,
+      };
+    } else {
+      // Unverified seal state
+      verdict = {
+        title: "Dispensed Packaging: Scratch Seal Verification Required",
+        description: `This medicine was registered as dispensed on-chain. To eliminate photocopy/cloning risks, scratch off the security strip on your box and verify the secret code below.`,
+        variant: "warning",
+        icon: AlertTriangle,
+      };
     }
   } else if (isActive) {
+    const isParentDispensed = unit && unit.parentId === "0" && Number(unit.quantity) > 0;
     verdict = {
       title: "Verified Authentic Pharmaceutical - In Stock",
-      description: "Direct unbroken provenance from certified manufacturer. Available in authorized retail stock, ready for patient purchase.",
+      description: isParentDispensed
+        ? `Direct unbroken provenance from certified manufacturer. Authorized pharmacy stock (${unit.quantity} active units remaining in inventory).`
+        : "Direct unbroken provenance from certified manufacturer. Available in authorized retail stock, ready for patient purchase.",
       variant: "success",
       icon: CheckCircle2,
     };
@@ -903,6 +1038,143 @@ function VerifyContent() {
                       This medicine was registered as dispensed on Ethereum Sepolia. If you or a family member scanned this item previously, this count is expected. If you are examining an unpurchased box in a retail setting, verify that the packaging and physical scratch seal remain unopened and authentic.
                     </p>
                   </div>
+                </div>
+              </Card>
+            )}
+
+            {/* 2b. Patient Physical Scratch Seal Verification Card */}
+            {isSold && (
+              <Card
+                padding="md"
+                style={{
+                  border:
+                    sealStatus === "verified" || sealStatus === "consumed"
+                      ? "1px solid var(--color-success-border)"
+                      : sealStatus === "locked" || sealStatus === "invalid"
+                      ? "1px solid var(--color-danger-border)"
+                      : "1px solid var(--color-primary-border)",
+                  backgroundColor:
+                    sealStatus === "verified" || sealStatus === "consumed"
+                      ? "var(--color-success-subtle)"
+                      : sealStatus === "locked" || sealStatus === "invalid"
+                      ? "var(--color-danger-subtle)"
+                      : "var(--color-bg-surface)",
+                }}
+              >
+                <div style={{ display: "flex", flexDirection: "column", gap: "var(--space-3)" }}>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: "var(--space-2)" }}>
+                    <div style={{ display: "flex", alignItems: "center", gap: "var(--space-2)" }}>
+                      <ShieldCheck
+                        size={20}
+                        style={{
+                          color:
+                            sealStatus === "verified" || sealStatus === "consumed"
+                              ? "var(--color-success)"
+                              : sealStatus === "locked" || sealStatus === "invalid"
+                              ? "var(--color-danger)"
+                              : "var(--color-primary)",
+                        }}
+                      />
+                      <strong style={{ fontSize: "var(--text-sm)", color: "var(--color-text-main)" }}>
+                        Physical Packaging Scratch-Off Security Seal
+                      </strong>
+                    </div>
+                    <span
+                      style={{
+                        fontSize: "11px",
+                        fontWeight: 700,
+                        padding: "2px 8px",
+                        borderRadius: "var(--radius-pill)",
+                        backgroundColor:
+                          sealStatus === "verified" || sealStatus === "consumed"
+                            ? "#dcfce7"
+                            : sealStatus === "locked" || sealStatus === "invalid"
+                            ? "#fee2e2"
+                            : "#dbeafe",
+                        color:
+                          sealStatus === "verified" || sealStatus === "consumed"
+                            ? "var(--color-success)"
+                            : sealStatus === "locked" || sealStatus === "invalid"
+                            ? "var(--color-danger)"
+                            : "#1e40af",
+                      }}
+                    >
+                      {sealStatus === "consumed"
+                        ? "Seal Authenticated"
+                        : sealStatus === "verified"
+                        ? "Verified Genuine"
+                        : sealStatus === "locked"
+                        ? "Security Lockout"
+                        : sealStatus === "invalid"
+                        ? "Seal Mismatch"
+                        : "Verification Required"}
+                    </span>
+                  </div>
+
+                  <p style={{ margin: 0, fontSize: "var(--text-xs)", color: "var(--color-text-muted)", lineHeight: 1.5 }}>
+                    {sealStatus === "consumed" || sealStatus === "verified"
+                      ? "This packaging's single-use scratch-off seal has been cryptographically matched against the manufacturer's HMAC verifier. Replay or photocopy attempts on this carton are blocked."
+                      : "To eliminate photocopy attacks where counterfeiters photocopy a legitimate packaging QR code, scratch off the silver security seal on your box to reveal the secret code, then verify it below:"}
+                  </p>
+
+                  {sealMessage && (
+                    <div
+                      style={{
+                        padding: "8px 12px",
+                        borderRadius: "var(--radius-control)",
+                        fontSize: "var(--text-xs)",
+                        fontWeight: 600,
+                        backgroundColor:
+                          sealStatus === "verified" || sealStatus === "consumed"
+                            ? "var(--color-success-bg)"
+                            : "var(--color-danger-subtle)",
+                        color:
+                          sealStatus === "verified" || sealStatus === "consumed"
+                            ? "var(--color-success)"
+                            : "var(--color-danger)",
+                        border:
+                          sealStatus === "verified" || sealStatus === "consumed"
+                            ? "1px solid var(--color-success-border)"
+                            : "1px solid var(--color-danger-border)",
+                      }}
+                    >
+                      {sealMessage}
+                    </div>
+                  )}
+
+                  {sealStatus !== "verified" && sealStatus !== "consumed" && sealStatus !== "locked" && (
+                    <form
+                      onSubmit={handleVerifySeal}
+                      style={{ display: "flex", gap: "var(--space-2)", marginTop: "var(--space-1)", flexWrap: "wrap" }}
+                    >
+                      <input
+                        type="text"
+                        placeholder="Enter 12-char scratch seal code"
+                        value={scratchInput}
+                        onChange={(e) => setScratchInput(e.target.value.toUpperCase())}
+                        style={{
+                          flex: 1,
+                          minWidth: "200px",
+                          height: "40px",
+                          padding: "0 var(--space-3)",
+                          borderRadius: "var(--radius-control)",
+                          border: "1px solid var(--color-border-default)",
+                          fontFamily: "var(--font-mono)",
+                          fontSize: "var(--text-sm)",
+                          textTransform: "uppercase",
+                        }}
+                      />
+                      <Button
+                        type="submit"
+                        variant="primary"
+                        size="sm"
+                        loading={sealVerifying}
+                        disabled={sealVerifying || !scratchInput.trim()}
+                      >
+                        Verify Seal Code
+                      </Button>
+                    </form>
+                  )}
                 </div>
               </Card>
             )}

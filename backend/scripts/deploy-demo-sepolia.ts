@@ -34,8 +34,16 @@ async function main() {
   const quantity = Number(process.env.MEDICINE_QUANTITY ?? "100");
   if (!Number.isInteger(quantity) || quantity <= 0) throw new Error("MEDICINE_QUANTITY must be a positive integer");
 
+  let forwarderAddress = process.env.TRUSTED_FORWARDER || process.env.NEXT_PUBLIC_TRUSTED_FORWARDER;
+  if (!forwarderAddress || forwarderAddress === ethers.ZeroAddress) {
+    const ForwarderFactory = await ethers.getContractFactory("PharmaTreeForwarder", manufacturer);
+    const forwarder = await ForwarderFactory.deploy("PharmaTreeForwarder");
+    await forwarder.waitForDeployment();
+    forwarderAddress = await forwarder.getAddress();
+  }
+
   const Factory = await ethers.getContractFactory("PharmaTree");
-  const contract = await Factory.connect(manufacturer).deploy();
+  const contract = await Factory.connect(manufacturer).deploy(forwarderAddress);
   await contract.waitForDeployment();
   const address = await contract.getAddress();
 

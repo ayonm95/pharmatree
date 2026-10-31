@@ -124,7 +124,7 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Coarse GPS geohashing: Round coordinates to 2 decimal places (~1.1 km city level) to protect user location privacy (GDPR / HIPAA)
+    // Coarse GPS rounding: Round coordinates to 2 decimal places (~1.1 km neighborhood resolution) to protect terminal location privacy without claiming formal statutory compliance
     let coordinates: { latitude: number; longitude: number } | undefined;
     if (data.coordinates) {
       coordinates = {
