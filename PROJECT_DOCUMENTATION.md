@@ -28,7 +28,7 @@ This repository is structured as an enterprise monorepo containing distinct `bac
 | `backend/test/PharmaTree.test.ts` | Chai/Mocha smart contract unit test suite with Hardhat snapshot fixtures (25 tests) |
 | `backend/test/PosInvariants.test.ts` | Operational supply chain invariants, randomized property tests for $\Sigma Q$ conservation, and 5-tier evaluator (15 tests) |
 | `backend/test/Gs1AndSeals.test.ts` | GS1 Digital Link standard, GTIN-14 Luhn Mod 10, DataMatrix, and dual-scheme cryptographic seal tests (16 tests) |
-| `backend/test/Eip712Forwarder.test.ts` | EIP-712 typed meta-transactions, ERC-2771 forwarder verification, and relayer role decoupling (6 tests) |
+| `backend/test/Eip712Forwarder.test.ts` | EIP-712 typed meta-transactions, ERC-2771 forwarder verification, and relayer role decoupling (7 tests) |
 | `backend/test/AtomicSellRace.test.ts` | Concurrent checkout race conditions and atomic state reversion (2 tests) |
 | `frontend/src/app/` | Next.js 16 App Router pages (`/`, `/create`, `/admin`, `/transfers`, `/inventory`, `/verify`, `/pos`) |
 | `frontend/src/app/01/[gtin]/10/[lot]/21/[serial]/` | Standard GS1 Digital Link healthcare resolver route |
@@ -465,7 +465,7 @@ npm install
 # Compile contracts in backend
 npm run compile
 
-# Run complete automated test suite (53 test cases passing)
+# Run complete automated test suite (82 test cases passing: 65 Hardhat + 17 Vitest)
 npm test
 ```
 
@@ -508,7 +508,7 @@ Always use dedicated testnet wallets with non-real funds.
 ### 12.1 Automated Testing & Linting:
 
 ```bash
-# Automated tests across 5 test suites (64 tests passing, 93.59% Solidity statement coverage)
+# Automated tests across 8 test suites (82 tests passing: 65 Hardhat + 17 Vitest, 93.59% Solidity statement coverage)
 npm test
 
 # Frontend code quality & types
