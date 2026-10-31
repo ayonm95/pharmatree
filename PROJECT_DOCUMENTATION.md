@@ -1,30 +1,64 @@
-# PharmaTree project documentation
+# PharmaTree Project Documentation
+### Enterprise Technical Specification, Threat Model, Invariant Theorems & API Reference
 
-## 1. Purpose
+> [!NOTE]
+> **Testnet Prototype & Research Specification (Ethereum Sepolia)**  
+> PharmaTree is an end-to-end pharmaceutical provenance platform demonstrating hybrid on-chain custody tracking, EIP-712 gasless meta-transactions, GS1 packaging standards, and tamper-evident physical seal verification.
 
-PharmaTree is a blockchain-based pharmaceutical tracking application. It
-records medicine provenance from manufacturer creation through authorized
-handler transfers and final sale.
+---
 
-The system models a product hierarchy:
+## Table of Contents
+1. [System Purpose & Domain Model](#1-system-purpose--domain-model)
+2. [Repository & Monorepo Workspace Structure](#2-repository--monorepo-workspace-structure)
+3. [System Architecture & Hybrid Trust Boundaries](#3-system-architecture--hybrid-trust-boundaries)
+4. [Smart Contract State Machine & Mass Conservation](#4-smart-contract-state-machine--mass-conservation)
+5. [Application Workflows & Custody Handshakes](#5-application-workflows--custody-handshakes)
+6. [POS Dispensing Lifecycle, Signing & Reconciliation](#6-pos-dispensing-lifecycle-signing--reconciliation)
+7. [5-Tier Anti-Counterfeiting Engine](#7-5-tier-anti-counterfeiting-engine)
+8. [Dual-Scheme Tamper Seals (Physical 2FA)](#8-dual-scheme-tamper-seals-physical-2fa)
+9. [GS1 Digital Link & Barcode Standardization](#9-gs1-digital-link--barcode-standardization)
+10. [Multi-Tenant POS Authentication & Gas Throttling](#10-multi-tenant-pos-authentication--gas-throttling)
+11. [Smart Contract Function & Event Reference](#11-smart-contract-function--event-reference)
+12. [API Endpoint & Status Code Reference](#12-api-endpoint--status-code-reference)
+13. [Environment Configuration & Secrets Management](#13-environment-configuration--secrets-management)
+14. [Local Development & Deployment Workflows](#14-local-development--deployment-workflows)
+15. [Automated Testing & Invariant Validation](#15-automated-testing--invariant-validation)
+16. [Comprehensive Threat Model Matrix](#16-comprehensive-threat-model-matrix)
+17. [Physical Reality Gap & Known Limitations](#17-physical-reality-gap--known-limitations)
+18. [Author & License Notice](#18-author--license-notice)
 
-```text
-Container -> Shipment -> Batch -> Box -> Individual item
-```
+---
 
-Every unit has a numeric on-chain ID, parent/root lineage, level, manufacturer,
-current owner, pending receiver, status, quantity, and metadata.
+## 1. System Purpose & Domain Model
 
-## 2. Repository structure
+PharmaTree is a hybrid blockchain-and-edge platform designed to track pharmaceutical provenance from genesis manufacturing through multi-tier distribution to final retail pharmacy dispensing.
 
-This repository is structured as an enterprise monorepo containing distinct `backend/` and `frontend/` workspaces:
+The platform models the standard pharmaceutical packaging hierarchy:
+$$\text{Container (Level 0)} \longrightarrow \text{Shipment (Level 1)} \longrightarrow \text{Batch (Level 2)} \longrightarrow \text{Box (Level 3)} \longrightarrow \text{Individual Item (Level 4)}$$
+
+Every unit registered on-chain contains:
+- `id`: Monotonically increasing sequential integer identifier ($1 \le \text{id} \le 2^{256}-1$).
+- `parentId` / `rootId`: Lineage pointers tracking ancestor container or manufacturing batch.
+- `level`: Package tier (`Container`, `Shipment`, `Batch`, `Box`, `IndividualItem`).
+- `manufacturer`: Ethereum address of the certified genesis manufacturer.
+- `currentOwner`: Ethereum address of the entity currently holding verifiable custody.
+- `pendingReceiver`: Ethereum address of the designated recipient during an in-transit transfer.
+- `status`: Lifecycle state (`Active = 0`, `PendingTransfer = 1`, `Sold = 2`, `Rejected = 3`).
+- `quantity`: Exact discrete unit count (tablets, vials, or blister counts).
+- `metadata`: Standardized description string with dynamic quantity synchronization.
+
+---
+
+## 2. Repository & Monorepo Workspace Structure
+
+The repository is organized as a clean enterprise monorepo:
 
 | Path | Responsibility |
-| --- | --- |
-| `backend/contracts/PharmaTree.sol` | Smart contract logic: RBAC, hierarchy, ownership, transfers, partitioning, rejections, sales, and ERC-2771 context |
+| :--- | :--- |
+| `backend/contracts/PharmaTree.sol` | Core smart contract: RBAC, hierarchy, ownership, two-party transfers, fractional sales, and ERC-2771 context |
 | `backend/contracts/PharmaTreeForwarder.sol` | OpenZeppelin ERC2771Forwarder enabling gasless EIP-712 meta-transactions |
 | `backend/scripts/` | Sepolia and local Hardhat deployment, role granting, and verification workflows |
-| `backend/scripts/e2e-sepolia-validation.ts` | Production test suite validating 8 core anti-counterfeit & dispensing invariants against Sepolia |
+| `backend/scripts/e2e-sepolia-validation.ts` | Live Sepolia smoke test validating 8 core invariants against pre-seeded testnet fixtures #1-#10 |
 | `backend/test/PharmaTree.test.ts` | Chai/Mocha smart contract unit test suite with Hardhat snapshot fixtures (25 tests) |
 | `backend/test/PosInvariants.test.ts` | Operational supply chain invariants, randomized property tests for $\Sigma Q$ conservation, and 5-tier evaluator (15 tests) |
 | `backend/test/Gs1AndSeals.test.ts` | GS1 Digital Link standard, GTIN-14 Luhn Mod 10, DataMatrix, and dual-scheme cryptographic seal tests (16 tests) |
@@ -33,632 +67,423 @@ This repository is structured as an enterprise monorepo containing distinct `bac
 | `frontend/src/app/` | Next.js 16 App Router pages (`/`, `/create`, `/admin`, `/transfers`, `/inventory`, `/verify`, `/pos`) |
 | `frontend/src/app/01/[gtin]/10/[lot]/21/[serial]/` | Standard GS1 Digital Link healthcare resolver route |
 | `frontend/src/app/pos/` | High-throughput Vendor POS QR Scanner Terminal with dual camera/HID wedge listeners |
-| `frontend/src/app/api/pos/` | POS backend endpoints: `/verify` (5-tier audit), `/sell` (gasless relayer), `/incident` (quarantine logger) |
-| `frontend/src/app/api/units/` | Fast indexed cursor-paginated projection endpoint with automated on-chain backfill |
+| `frontend/src/app/api/pos/` | POS backend endpoints: `/verify` (5-tier audit), `/sell` (gasless relayer), `/incident` (quarantine telemetry), `/seal/reset` |
+| `frontend/src/app/api/units/` | Indexed cursor-paginated projection endpoint with automated on-chain backfill |
 | `frontend/src/app/api/health/` | Production diagnostic health check endpoint (RPC latency, block height, contract status, relayer solvency) |
-| `frontend/src/app/verify/page.tsx` | Role-adaptive medicine provenance verification, 4-stage visual journey stepper & QR audit trail |
+| `frontend/src/app/verify/page.tsx` | Role-adaptive medicine provenance verification, 4-stage visual journey stepper & nuanced scan telemetry |
 | `frontend/src/app/error.tsx` | Route-level React 19 error boundary with diagnostics modal and retry action |
 | `frontend/src/app/global-error.tsx` | Root layout catastrophic error boundary with standalone recovery HTML |
-| `frontend/src/lib/db.ts` | Serverless Postgres (Neon) & local file fallback for atomic scans, incidents, units, and seals |
-| `frontend/src/lib/rateLimit.ts` | Distributed sliding-window rate limiting with Upstash Redis and fail-closed / fail-open semantics |
+| `frontend/src/lib/db.ts` | Serverless Postgres (Neon) client managing `tenants`, `tenant_daily_quotas`, `used_reset_nonces`, and `tamper_seals` |
+| `frontend/src/lib/rateLimit.ts` | Hybrid rate limiting: Upstash Redis sliding window (when configured) with local in-memory fallback |
+| `frontend/src/lib/tenantAuth.ts` | Constant-time SHA-256 API key verification, vendor whitelisting, and per-IP sandbox partitioning |
 | `frontend/src/lib/gs1.ts` | GS1 Digital Link builder/parser, GTIN-14 Luhn check digit, and 2D DataMatrix generator |
-| `frontend/src/lib/sealVerifier.ts` | Dual-scheme tamper seal engine (Scheme 0 legacy + Scheme 1 Crockford HMAC with 24h lockout) |
-| `frontend/src/lib/indexer.ts` | Event indexer backfilling from block 11995000 with on-chain unit detail hydration |
+| `frontend/src/lib/sealVerifier.ts` | Dual-scheme tamper seal engine with client-scoped exponential backoff and versioned HMAC verifiers |
+| `frontend/src/lib/indexer.ts` | Event indexer starting from contract deployment block `12032098` |
 | `frontend/src/lib/tierEvaluator.ts` | Pure 5-Tier Anti-Counterfeiting evaluation engine decoupled from RPC and database |
-| `frontend/src/components/PharmaWalletView.tsx` | Comprehensive reactive wallet dashboard, inventory partitions, rejection UI, and transfer controls |
-| `frontend/src/lib/audio-alerts.ts` | Zero-dependency Web Audio API synthesizer for positive chimes & emergency counterfeit sirens |
-| `frontend/src/hooks/useHardwareBarcodeScanner.ts` | Global keystroke wedge listener for USB/Bluetooth 2D barcode and QR scanner guns |
 | `frontend/src/lib/rpc.ts` | Resilient multi-endpoint FallbackProvider with exponential backoff & rate-limit recovery |
 | `frontend/src/lib/pharmaTree.ts` | Frontend ABI, contract addresses, levels, and status mappings |
-| `frontend/src/lib/ipfs.ts` | Medicine metadata formatting helper |
 
-## 3. Architecture
+---
 
-### System architecture
+## 3. System Architecture & Hybrid Trust Boundaries
 
-```mermaid
-flowchart LR
-    U[Manufacturer / Handler / Admin] --> MM[MetaMask]
-    MM --> UI[Next.js 16 Dashboard]
-    UI -->|Resilient Fallback Reads| RPC[Multi-Endpoint RPC Pool]
-    UI -->|Signed Transactions| MM
-    MM -->|Submit Tx| RPC
-    RPC --> C["PharmaTree.sol (0xbD24...d72)"]
-    C --> S[On-chain Unit State & Partitions]
-    C --> E[Immutable Audit Events]
-    UI --> H[Activity & Inventory Partitions]
-    UI --> M[Metadata Formatter]
-    M --> C
-```
-
-### Application layers
-
-```mermaid
-flowchart TB
-    Routes[Next.js App Router] --> Wallet[PharmaWalletView]
-    Wallet --> Provider[Multi-Endpoint FallbackProvider (rpc.ts)]
-    Wallet --> Signer[MetaMask Signer]
-    Wallet --> ABI[ABI & Enum Mappings]
-    Wallet --> Metadata[Metadata Helper]
-    Provider --> Contract["PharmaTree.sol (0xbD24...d72)"]
-    Signer --> Contract
-    Contract --> Roles[Access Control Matrix]
-    Contract --> Units[Lineage & Stock Partitions]
-    Contract --> Events[Immutable Audit Events]
-```
-
-The frontend uses a resilient multi-endpoint JSON-RPC fallback provider (`rpc.ts`) that distributes read requests across high-availability Sepolia nodes (Tenderly, PublicNode, 1RPC, Sepolia.org) with automatic backoff on HTTP 429 rate limits. MetaMask supplies the signer for state-changing operations. The smart contract remains the single source of truth for roles, ownership, hierarchy, and status.
-
-## 4. Smart-contract model
-
-### Roles
-
-- **Admin:** grants and removes manufacturer and handler roles.
-- **Manufacturer:** creates root medicine units and participates in transfers.
-- **Handler:** receives, transfers, accepts, and rejects assigned units.
-- **Current owner:** can initiate transfers, create child units where allowed,
-  and mark active stock as sold.
-
-The deploying account is initialized as admin and manufacturer.
-
-### Unit levels
-
-The numeric enum order used by the contract and frontend is:
-
-| Value | Level |
-| ---: | --- |
-| 0 | Container |
-| 1 | Shipment |
-| 2 | Batch |
-| 3 | Box |
-| 4 | IndividualItem |
-
-### Statuses
-
-| Value | Status | Meaning |
-| ---: | --- | --- |
-| 0 | Active | Available for normal ownership operations |
-| 1 | PendingTransfer | Transfer initiated and awaiting receiver action |
-| 2 | Sold | Finalized and no longer transferable |
-| 3 | Rejected | Pending transfer was rejected |
-
-## 5. Application workflows
-
-### End-to-end setup workflow
-
-```mermaid
-sequenceDiagram
-    participant Dev as Developer
-    participant H as Hardhat
-    participant N as Local node or Sepolia
-    participant W as MetaMask
-    participant UI as Dashboard
-
-    Dev->>H: npm run compile
-    Dev->>H: npm test
-    Dev->>N: Deploy PharmaTree.sol
-    N-->>Dev: Contract address and deployment block
-    Dev->>UI: Configure .env.local
-    W->>UI: Connect wallet
-    UI->>N: Read units and events
-    UI-->>W: Render inventory and activity
-```
-
-### Medicine traceability workflow
+PharmaTree operates as a hybrid Web3/Web2 system:
 
 ```mermaid
 flowchart TD
-    A[Deploy contract] --> B[Grant manufacturer role]
-    B --> C[Create root medicine unit]
-    C --> D{Divide quantity?}
-    D -->|Yes| E[Create partial child transfer]
-    D -->|No| F[Transfer complete unit]
-    E --> G[Receiver accepts or rejects]
-    F --> G
-    G -->|Accept| H[Receiver owns active stock]
-    G -->|Reject| I[Unit becomes rejected]
-    H --> J{Transfer onward?}
-    J -->|Yes| K[Repeat transfer handshake]
-    K --> H
-    J -->|No| L[Mark active stock sold]
-```
-
-### Partial transfer and lineage workflow
-
-```mermaid
-sequenceDiagram
-    participant S as Sender
-    participant C as PharmaTree.sol
-    participant R as Receiver
-    participant UI as Dashboard
-
-    S->>UI: Enter unit, receiver, and quantity
-    UI->>UI: Validate quantity is in stock
-    UI->>C: initiatePartialTransfer(...)
-    C->>C: Reduce sender remainder
-    C->>C: Create child with parent/root lineage
-    C-->>R: Store pending receiver
-    R->>C: acceptTransfer(child)
-    C->>C: Set receiver as current owner
-    C-->>UI: Emit completion event
-    UI->>UI: Refresh inventory and lineage
-```
-
-### Transfer rejection & stock restoration workflow
-
-```mermaid
-flowchart TD
-    Owner[Sender / Manufacturer] -->|initiatePartialTransfer| Pending[Status: PendingTransfer]
-    Pending --> Receiver{Pending Receiver}
-    Receiver -->|acceptTransfer| Active[Status: Active under Receiver]
-    Receiver -->|rejectTransfer| Rejected[Status: Rejected]
-    Rejected --> ClearPending[Clear pendingReceiver to address 0]
-    ClearPending --> KeepOwner[Ownership retained by Sender]
-    KeepOwner --> Restock[Quantity automatically restored to Sender In-Stock count]
-    Restock --> AuditTrail[Emit TransferRejected: indexed from, indexed rejectedBy]
-```
-
-1. **Cryptographic Protection**: Only the designated `pendingReceiver` can call `rejectTransfer(unitId)`.
-2. **Immediate Custody Restitution**: On rejection, `pendingReceiver` is reset to `address(0)`, while `currentOwner` remains with the sender, preventing inventory loss.
-3. **Automated Stock Restoration**: In the manufacturer/sender inventory, rejected partition quantities are automatically factored back into available inventory (`currentQuantity = activeUnits + rejectedReturnedUnits`), preventing false stock deficits.
-4. **Transparent Two-Way UI Attribution**:
-   - **For Rejecter Account**: Recent Activity displays a red `Rejected by You` badge, unit quantity, sender address, and rejection timestamp.
-   - **For Sender Account**: Inventory partition row displays `Rejected by 0x...` directly on the tile button, status `Returned to sender`, and audit log `Transfer Rejected: 0x... ➔ Rejected by 0x...`.
-   - **Public / Overview View**: Partition rows display `Rejected by 0x...` with exact retained quantities.
-
-### QR Code Verification & Public Provenance (/verify)
-
-PharmaTree provides an open verification portal enabling consumers, pharmacies, and regulators to verify authenticity without requiring Web3 wallets:
-
-```mermaid
-flowchart LR
-    Pack[Medicine Package / Batch] --> QR[Scannable QR Code]
-    QR --> Mobile[Phone camera or browser]
-    Mobile --> Page["/verify?unitId=X"]
-    Page --> RPC[Sepolia JSON-RPC read]
-    RPC --> SmartContract[PharmaTree.sol]
-    SmartContract --> Audit[Authenticity Badge + Custody Timeline + Etherscan Links]
-```
-
-1. **In-Dashboard QR Generation**: Handlers and manufacturers can click **View Public QR Code** on any inventory item or modal to generate, copy, or download a printable high-resolution PNG QR label.
-2. **Public Provenance Audit**: Scanning the QR code opens `/verify?unitId=X`, displaying the authenticity status, verified manufacturer wallet, container level, and an immutable chronological custody audit trail with direct links to Sepolia Etherscan.
-3. **Manual Unit Search**: Allows manual lookups for any unit ID directly from the verification interface.
-
-### Sale workflow
-
-```mermaid
-flowchart LR
-    Stock[Active stock] --> Validate[Validate unit and quantity]
-    Validate --> Mode{Sale type}
-    Mode -->|Full stock| SellFull[markAsSold: marks entire unit as Sold]
-    Mode -->|Partial stock| SellPart[sellQuantity: splits stock, updates metadata]
-    SellFull --> Sold[Sold]
-    SellPart --> Sold
-    Sold --> Block[Future transfers blocked]
-```
-
-PharmaTree supports both full and partial quantity sales:
-1. **Partial sales (`sellQuantity`)**: The seller can sell any integer quantity $\le$ available stock. The contract creates a new child unit for the sold portion marked as `Sold`, decrements the seller's remaining inventory, and dynamically synchronizes metadata on-chain for both units (e.g. `Paracetamol, 30 tablets`).
-2. **Full sales (`markAsSold`)**: Direct sell method that marks the entire unit quantity as `Sold`.
-3. The inventory and partition views track partial sales with a dedicated `Partially sold` status badge and display exact sold/active quantity tallies.
-4. **Owned inventory detachment**: Sold units (`Status.Sold`) are detached from on-hand owned inventory and total stock volume calculations across dashboard and handler inventory views, ensuring on-hand volume reflects only active and custody-held units.
-
-### Create medicine
-
-An authorized manufacturer or admin creates a root unit with a level, metadata,
-and positive quantity. The frontend validates wallet connection, role, name,
-and quantity before submitting the transaction.
-
-### Partial transfer
-
-The current owner can transfer all or part of an active unit's quantity to an
-authorized receiver. A partial transfer:
-
-1. Validates that the quantity is positive and in stock.
-2. Keeps the remainder on the sender's unit.
-3. Creates a child transfer unit for the quantity being sent.
-4. Records the pending receiver.
-5. Requires the receiver to accept or reject the transfer.
-
-Manufacturer views preserve lineage labels such as `1.1`. Handler inventory
-uses wallet-local numbering such as `1` and `2`, so units received from
-different senders are not incorrectly grouped together.
-
-### Transfer acceptance/rejection
-
-The receiver must be authorized and must match the pending receiver stored on
-the unit. Acceptance changes ownership and returns the unit to `Active`.
-Rejection clears the pending receiver and sets the unit to `Rejected`.
-
-### Sale & Retail Dispensing
-
-The current owner can mark an active unit as sold either completely (`markAsSold`)
-or partially (`sellQuantity`). Partial dispensing splits the stock into an active remainder
-and a detached sold child unit with synchronized metadata. Sold units cannot be
-transferred or sold again and are detached from on-hand owned inventory tallies.
-
-### Role administration
-
-The admin view grants manufacturer and handler roles. The dashboard prevents
-non-admin users from granting manufacturer roles and checks receiver
-authorization before transfer submission.
-
-## 6. Frontend routes
-
-All routes render the reusable `PharmaWalletView` component with a different
-view mode:
-
-| Route | Purpose |
-| --- | --- |
-| `/` | Overview, status summaries, reactive stock charts, and recent activity |
-| `/create` | Create root medicine units (Authorized Manufacturers only) |
-| `/admin` | Grant manufacturer and handler roles (Admin only) |
-| `/transfers` | Initiate, accept, reject, and review transfers |
-| `/inventory` | View owned stock, lineage, partitions, quantity, and rejection status |
-| `/verify` | Public consumer provenance verification and QR code audit trail |
-| `/pos` | Dedicated high-throughput Vendor POS QR Scanner Terminal with 5-tier counterfeit interception, fractional dispensing, and gasless relayer |
-
-The primary dashboard distinguishes manufacturer-created medicines from handler
-inventory. Manufacturer tables preserve creation and lineage context; handler
-tables focus on current stock and transfer status. The `/pos` terminal is an optimized,
-fullscreen clinical kiosk interface for high-speed retail checkout.
-
-## 7. Vendor POS QR Scanner Terminal & Anti-Counterfeit Engine
-
-The **Vendor POS Terminal** (`/pos`) is designed specifically for pharmacies, hospital dispensaries, and retail checkout counters. It bridges the physical dispensing of medicine with on-chain cryptographic state updates on Ethereum Sepolia.
-
-### 7.1 Dual-Input Hardware & Camera Engine
-- **Camera Viewfinder**: 60fps continuous auto-focus camera scanning using `html5-qrcode` with live targeting reticle, camera switcher (environment vs user), and LED torch toggle.
-- **Hardware HID Wedge Auto-Listener**: Custom React hook (`useHardwareBarcodeScanner`) that intercepts keystroke sequences from USB or Bluetooth 2D optical barcode and QR scanners (e.g. Zebra, Honeywell, Sunmi). It buffers input with high-speed threshold detection (<50ms inter-keystroke timing) and auto-submits on `Enter`, allowing hands-free scanning without requiring input element focus.
-
-### 7.2 Five-Tier Anti-Counterfeit Interception Matrix
-
-Every scanned unit is passed through a multi-tier cryptographic and state verification audit (`/api/pos/verify`):
-
-| Tier | Check Name | Failure Condition | POS Response & Action |
-| :--- | :--- | :--- | :--- |
-| **Tier 1** | **Registry Genesis** | `unitId > unitCounter` or `manufacturer == 0x0` | **UNREGISTERED / FAKE QR**: Siren sounds, dispensing blocked, unit quarantined. |
-| **Tier 2** | **Anti-Replay** | `status == Status.Sold` (Value: 2) | **ALREADY DISPENSED / CLONED QR**: Siren sounds, duplicate dispensing prevented, incident logged. |
-| **Tier 3** | **Custody Audit** | `currentOwner != vendorAddress` | **DIVERTED / STOLEN STOCK**: Warning displayed; flags inventory that bypassed authorized transfer handshakes. |
-| **Tier 4** | **Transit Integrity** | `status == Status.Rejected` (Value: 3) | **DAMAGED / COMPROMISED STOCK**: Blocked from sale; was rejected during transit (e.g., cold-chain breach). |
-| **Tier 5** | **Physical Scratch Seal** | `PIN != expectedHash / manufacturerSalt` | **TAMPERED PACKAGING / COPIED OUTER QR**: Flags physical box tampering or unauthorized duplicate packaging. |
-
-### 7.3 Scratch-Off Tamper Seals: Physical Two-Factor Authentication (2FA)
-
-#### The Problem: The "Digital-Physical Gap"
-A standard QR code printed on the outside of a pharmaceutical box is readable by anyone in the supply chain or retail aisle. A counterfeiter could photograph genuine QR codes and print 1,000 duplicate stickers on boxes filled with fake or adulterated medication. Digital blockchain tokens cannot independently detect an exterior photograph of paper.
-
-#### The Solution: Dual-Scheme Physical 2FA Tamper Seals
-PharmaTree implements a dual-scheme physical two-factor anti-counterfeiting mechanism:
-1. **Public Factor (Outer Box QR / GS1 DataMatrix)**: Contains standard public identifiers conforming to the GS1 Digital Link standard:
-   $$\text{https://pharmatree.io/01/\{GTIN\}/10/\{Batch\}/21/\{Serial\}?17=\{YYMMDD\}}$$
-2. **Concealed Secret Factor (Tamper Scratch-Off Foil)**: Beneath an opaque silver scratch-off coating lies a single-use secret verification code:
-   - **Scheme 0 (Legacy Backwards-Compatible)**: 4-digit PIN for units #1-#9 on Sepolia matching `manufacturer.slice(-4)`.
-   - **Scheme 1 (Cryptographically Hardened)**: High-entropy 12-character Crockford Base32 secret ($32^{12} \approx 1.15 \times 10^{18}$ search space, eliminating ambiguous characters $I, L, O, U$). The server registers an HMAC-SHA256 verifier salted with a private server pepper:
-     $$\text{Verifier} = \text{HMAC-SHA256}(\text{SEAL\_PEPPER}, \text{unitId} \parallel ":" \parallel \text{normalize}(\text{secret}))$$
-3. **Anti-DoS 24-Hour Cooldown Lockout**: To prevent attackers from bricking public sequential unit IDs by intentionally guessing incorrect secrets, PharmaTree imposes a temporary 24-hour cooldown lockout after 5 consecutive failed attempts (`LOCKED_REVIEW`), which can be immediately reset by the authorized manufacturer.
-4. **State Transition Lifecycle**:
-   $$\text{SEALED} \longrightarrow \text{VERIFIED} \longrightarrow \text{CONSUMED}$$
-   Once authenticated, `consumed_at` is permanently timestamped. Subsequent consumer or auditor scans display *"✓ Seal Previously Verified on [Date]"* without requiring code re-entry.
-
-### 7.4 Gasless Relayer & Fractional Dispensing
-- **Sponsored Transactions**: Pharmacies do not need to hold or manage Sepolia ETH. The `/api/pos/sell` endpoint uses an EIP-2771 compatible sponsored relayer wallet (`RELAYER_PRIVATE_KEY`) to broadcast transactions.
-- **Dynamic Fractional Dispensing**: Supports 1-tap partial dispensing (e.g., dispensing 1 blister of 10 tablets from a 30-tablet box). The smart contract's `sellQuantity` executes an atomic split: the parent unit retains the remaining balance, and a newly detached child unit is marked as `Sold` on-chain.
-- **Digital Patient Receipt**: Generates a verifiable digital receipt QR code containing transaction hash, timestamp, unit ID, and dispensed quantity for patient verification.
-
-### 7.5 Incident Logging & Quarantine Registry
-When an item fails any tier check, the terminal locks dispensing and emits an incident payload to `/api/pos/incident`. Incidents are logged to `.data/incidents.json` containing:
-- Incident ID (UUID / timestamped)
-- Unit ID and raw scan payload
-- Precise failure tier and diagnostic message
-- Vendor wallet address and terminal ID (`POS-DISPENSARY-01`)
-- Browser GPS coordinates (latitude, longitude) for geospatial counterfeit tracing.
-
-### 7.6 Single-Key Rapid POS Checkout Mode
-To eliminate checkout bottlenecks, standard counter checkout operates with zero friction:
-1. **1-Scan Instant Check**: Cashier scans carton QR with barcode gun or camera.
-2. **Keyboard Hotkey**: As soon as Tiers 1-4 pass (<100ms), the cashier presses **`Spacebar`** or **`Enter`** (or taps "Confirm Sale").
-3. **Automated Gasless Broadcast**: Sells the unit on Sepolia via the relayer in the background.
-4. **Collapsible Tamper Seal**: The Tier 5 scratch PIN input is placed inside a collapsible `<details>` drawer ("Advanced Tamper Inspection (Optional)"), so it never obstructs or slows standard retail checkout.
-
-## 8. End-to-End QR Verification Lifecycle & Role-Adaptive Experience
-
-A single serialized QR code follows a continuous cryptographic lifecycle from factory floor to patient unboxing.
-
-```mermaid
-flowchart TD
-    subgraph Stage1["1. Factory Genesis"]
-        Mfr["Manufacturer Mints Unit"] --> QROuter["Print Public QR Code<br>(Unit ID, Batch, Expiry)"]
-        Mfr --> TamperFoil["Apply Concealed Scratch Foil<br>(Single-Use PIN)"]
-        QROuter & TamperFoil --> Status0["On-Chain Status: Active (0)<br>Owner: Manufacturer"]
+    subgraph Clients["Physical Endpoints"]
+        Scanner["POS Scanner / Camera Gun"]
+        Consumer["Consumer Smartphone"]
+        Cashier["Dispensary Cashier Terminal"]
     end
 
-    subgraph Stage2["2. B2B Handshake Custody"]
-        Status0 --> Handshake["Initiate Transfer -> Pending (1)"]
-        Handshake --> HandlerScan{"Handler Scans QR"}
-        HandlerScan -->|Authorized Receiver| ReceptionSuite["Role-Adaptive Suite:<br>1-Click Accept / Reject"]
-        ReceptionSuite -->|Accept| Accepted["Status: Active (0)<br>Owner: Distributor/Pharmacy"]
-        ReceptionSuite -->|Reject| Rejected["Status: Rejected (3)<br>Stock Flagged & Reclaimed"]
+    subgraph Edge["Vercel Edge & Cloud Services"]
+        NextApp["Next.js 16 Web Application"]
+        RateLimit["Rate Limiter (Upstash Redis / In-Memory Fallback)"]
+        Relayer["Sponsored Relayer Service (/api/pos/sell)"]
+        IncidentLogger["Incident Telemetry (/api/pos/incident)"]
     end
 
-    subgraph Stage3["3. Retail POS Dispensing"]
-        Accepted --> POSScan["Pharmacist 1-Scan Check"]
-        POSScan --> Hotkey["Press Space / Enter to Sell"]
-        Hotkey --> RelayerSale["Gasless Relayer broadcasts markAsSold"]
-        RelayerSale --> Status2["On-Chain Status: Sold (2)"]
+    subgraph State["Durable Data Layer (Neon PostgreSQL)"]
+        Tenants["tenants & tenant_daily_quotas"]
+        UsedNonces["used_reset_nonces (Anti-Replay)"]
+        Seals["tamper_seals (HMAC Verifiers)"]
+        Incidents["pos_incidents (Forensic Logs)"]
     end
 
-    subgraph Stage4["4. Consumer Home Scan (/verify)"]
-        Status2 --> PatientScan["Patient Scans with Phone Camera"]
-        PatientScan --> ScanCounter{"Scan Telemetry Count"}
-        ScanCounter -->|Scan Count == 1| VerifiedHome["✅ LEGITIMATE PURCHASE<br>Dispensed by Pharmacy on [Date/Time]"]
-        ScanCounter -->|Scan Count > 1| ReplayHome["🚨 COUNTERFEIT REPLAY ALERT<br>Auditory Siren + 'REJECT AS IT IS' Banner"]
-        Rejected --> DangerHome["❌ DANGER: REJECTED IN TRANSIT<br>Unsafe Custody - Do Not Consume"]
-    end
-```
-
-### 8.1 Role-Adaptive Scan Interface
-When a QR code is read on `/verify`, the page detects who is scanning:
-
-1. **Consumer View (Public / Patients without Handler Wallet)**:
-   - **Interactive Visual Journey Stepper**: Displays an illustrated 4-stage progress line (`1. Genesis Packaged` -> `2. B2B Handshakes` -> `3. Pharmacy POS` -> `4. Patient Check`) with green checkmarks and timestamps.
-   - **Authentic First Scan**: If `status == Sold` and `scanCount <= 1`, verifies genuine purchase, displays dispensing pharmacy, batch details, and dosage instructions.
-   - **Duplicate / Cloned Scan**: If `status == Sold` and `scanCount > 1`, triggers an auditory alert tone and displays a prominent red warning card:
-     > **REJECT AS IT IS (DO NOT ACCEPT OR CONSUME)**  
-     > *This QR code was marked SOLD on-chain and has been scanned multiple times. If you did not personally buy this from a registered pharmacy, this packaging QR is a cloned counterfeit duplicate. Refuse acceptance immediately.*
-
-2. **Authorized Handler View (Connected Wallet with Handler/Manufacturer Role)**:
-   - **1-Click Inbound Reception Suite**: If the unit is currently in transit to the handler's wallet (`status == PendingTransfer`), displays prominent **"Accept Shipment into Custody"** and **"Reject Damaged / Tampered Shipment"** buttons with direct MetaMask signing.
-   - **Upstream Carrier Ancestry**: Displays root ancestor ID, parent container ID, batch remainder, and cold-chain integrity flags.
-
-## 9. Environment configuration
-
-Create local files from the committed templates:
-
-```bash
-cp .env.example .env
-cp .env.local.example .env.local
-```
-
-`.env.example` contains deployment variables such as:
-
-- `RPC_URL` and `PRIVATE_KEY` for local scripts.
-- `SEPOLIA_RPC_URL` and `SEPOLIA_PRIVATE_KEY_MANUFACTURER` for Sepolia.
-- Optional distributor/manufacturer addresses and keys.
-- `ETHERSCAN_API_KEY` for verification.
-
-`.env.local.example` contains browser configuration:
-
-```dotenv
-NEXT_PUBLIC_RPC_URL=http://127.0.0.1:8545
-NEXT_PUBLIC_CHAIN_ID=31337
-NEXT_PUBLIC_PHARMA_TREE_CONTRACT=0xYOUR_DEPLOYED_CONTRACT_ADDRESS
-NEXT_PUBLIC_DEPLOYMENT_BLOCK=
-NEXT_PUBLIC_PINATA_API_KEY=
-NEXT_PUBLIC_PINATA_SECRET_API_KEY=
-```
-
-Use chain ID `11155111` and the Sepolia RPC URL for Sepolia. Never commit
-`.env`, `.env.local`, private keys, API keys, or real RPC project IDs.
-
-## 10. Local development
-
-### 10.1 Environment Setup
-1. **Root & Backend Environment**:
-   Copy `.env.example` to `backend/.env` and provide your testnet keys:
-   ```bash
-   cp .env.example backend/.env
-   ```
-2. **Frontend Environment**:
-   Copy `frontend/.env.local.example` (or use `.env.example`) to `frontend/.env.local`:
-   ```bash
-   cp frontend/.env.local.example frontend/.env.local
-   ```
-
-### 10.2 Install and Run Tests
-From the repository root:
-
-```bash
-# Install root and workspace dependencies
-npm install
-
-# Compile contracts in backend
-npm run compile
-
-# Run complete automated test suite (100 test cases passing: 65 Hardhat + 35 Vitest)
-npm test
-```
-
-### 10.3 Run Local Node & Frontend Dashboard
-1. Start the Hardhat local node:
-   ```bash
-   cd backend && npx hardhat node
-   ```
-2. In a second terminal, deploy to the local network:
-   ```bash
-   cd backend && npx hardhat run scripts/deploy.ts --network localhost
-   ```
-3. Update `NEXT_PUBLIC_PHARMA_TREE_CONTRACT` in `frontend/.env.local` with the deployed address.
-4. Start the Next.js development server:
-   ```bash
-   npm run dev
-   ```
-5. Open <http://localhost:3000> in your browser.
-
-## 11. Sepolia deployment & live scripts
-
-To deploy and configure on the Ethereum Sepolia testnet:
-
-```bash
-# Deploy contract to Sepolia
-npm run deploy:sepolia
-
-# Grant distributor/handler roles
-cd backend && npx hardhat run scripts/grant-roles.ts --network sepolia
-
-# Execute end-to-end multi-party transfer flows
-cd backend && npx hardhat run scripts/sepolia-one-click-flow.ts --network sepolia
-cd backend && npx hardhat run scripts/sepolia-two-wallet-flow.ts --network sepolia
-```
-
-Always use dedicated testnet wallets with non-real funds.
-
-## 12. Validation & Quality Assurance
-
-### 12.1 Automated Testing & Linting:
-
-```bash
-# Automated tests across 9 test suites (100 tests passing: 65 Hardhat + 35 Vitest, 93.59% Solidity statement coverage)
-npm test
-
-# Frontend code quality & types
-npm run lint
-
-# Production Next.js build
-npm run build
-```
-
-### 12.2 E2E Sepolia Live Invariant Validation Suite:
-Execute real-world on-chain invariant testing against the live Sepolia contract without mocks:
-
-```bash
-cd backend && npx hardhat run scripts/e2e-sepolia-validation.ts --network sepolia
-```
-
-The validation suite verifies 8 operational invariants (8/8 passing):
-1. **Relayer Gas Solvency**: Verifies gas sponsorship wallet holds sufficient Sepolia ETH ($\ge 0.005$ ETH threshold).
-2. **Tier 1 (Genesis Registration)**: Validates legitimate origin of active Unit #1 under authorized manufacturer `0x6537...1537`.
-3. **Tier 1 (Forged QR Interception)**: Verifies out-of-bounds scanned unit (e.g. Unit #9999) is intercepted as `UNREGISTERED_ID` and triggers quarantine alert.
-4. **Tier 2 (Anti-Replay / Already-Sold)**: Verifies that previously sold units (Unit #2 with `Status.Sold`) are strictly blocked from re-sale (`ALREADY_SOLD_REPLAY`).
-5. **Tier 3 (Anti-Diversion & Custody Mismatch)**: Verifies that stock belonging to another distributor (Unit #8) flags unauthorized custody diversion when scanned by a different vendor.
-6. **Tier 4 (Transit Integrity)**: Halts checkout if a unit was flagged with `Status.Rejected` (contaminated or broken seal).
-7. **Tier 5 (Physical 2FA Scratch Seal)**: Verifies that only authentic cryptographic scratch PINs matching manufacturer salt pass, while counterfeit PINs fail.
-8. **Fractional Dispensing Invariant**: Validates conservation of medication units ($\Sigma Q = \text{const}$) during `sellQuantity` child unit partitioning.
-
-**Result: 8/8 live Sepolia invariant checks passing ✅**
-
-## 13. Security Hardening & Defense-in-Depth Architecture
-
-PharmaTree implements multi-layered security controls to protect retail kiosk terminals, hospital dispensaries, and consumer verification interfaces:
-
-### 13.1 Strict HTTP Security Headers (`next.config.ts`)
-- **Content-Security-Policy (CSP)**: Disallows unauthorized third-party scripts, inline frame injection, and dangerous object tags (`frame-ancestors 'none'`, `base-uri 'self'`, `object-src 'none'`).
-- **X-Frame-Options: DENY**: Complete clickjacking mitigation.
-- **X-Content-Type-Options: nosniff**: Defends against MIME-confusion attacks.
-- **Strict-Transport-Security (HSTS)**: 2-year HTTPS enforcement (`max-age=63072000; includeSubDomains; preload`).
-- **Permissions-Policy**: Restricts camera access strictly to same-origin kiosk scanner, blocks microphone.
-- **Referrer-Policy: strict-origin-when-cross-origin**: Prevents internal route leaking.
-
-### 13.2 Sliding-Window In-Memory Rate Limiting (`lib/rateLimit.ts`)
-Protects against brute-force unit ID scanning and RPC node exhaustion:
-- State-changing POS dispensing (`/api/pos/sell`): 30 requests / minute per IP.
-- Anti-counterfeit verification (`/api/pos/verify`): 120 requests / minute per IP.
-- Incident quarantine reporting (`/api/pos/incident`): 60 requests / minute per IP.
-- Consumer scan recording (`/api/scan`): 120 requests / minute per IP.
-- Returns RFC-compliant rate limit headers (`X-RateLimit-Limit`, `X-RateLimit-Remaining`, `X-RateLimit-Reset`, `Retry-After`).
-
-### 13.3 Input Boundary Validation & Sanitization
-- Bounded integer validation: Strict `parseSafePositiveInt` bounds ($1 \le \text{unitId} \le 2^{53}-1$).
-- XSS and Control Character Stripping: Strips ASCII control codes (`[\x00-\x1F\x7F]`) and entity-encodes `<>&"'` across freeform text fields.
-- Ethereum Address Validation: Verifies hexadecimal addresses match `/^0x[0-9a-fA-F]{40}$/`.
-
-### 13.4 Production Health Diagnostics Endpoint (`/api/health`)
-Provides live system telemetry for automated uptime monitoring (DataDog, Prometheus, AWS Route53):
-- **RPC Availability & Latency**: Tests connectivity to Sepolia nodes and reports millisecond round-trip time.
-- **Contract Operability**: Queries live unit count on `0xbD245c7f7C8bF4A8Ec016e8C370D3e6931BeAd72` (Forwarder: `0x2d24b5b481d0981AE7904790e9d8BF4c162b6c8c`).
-- **Relayer Solvency**: Checks gasless relayer balance (`0x335684Cfb813f673fed3f2bb87BF2778D4E96A72`), verifying it holds $>0.005$ ETH for transaction sponsorship without exposing private keys. The hot relayer holds zero contract roles.
-- **Runtime Metrics**: Reports memory RSS, heap usage, and server uptime.
-
-### 13.5 React 19 Client Error Boundaries
-- **`app/error.tsx`**: Catches route-level rendering exceptions, displaying diagnostic error digests with a one-click "Retry Operation" trigger.
-- **`app/global-error.tsx`**: Catches root layout disruptions, presenting a standalone emergency recovery layout.
-
-### 13.6 Multi-Tenant POS API Authentication & Anti-DoS Gas Throttling (`lib/tenantAuth.ts`)
-- **Constant-Time Verification**: API keys (`pt_live_...`, `pt_test_...`) are pre-hashed with SHA-256 and compared using `crypto.timingSafeEqual` to prevent side-channel timing attacks.
-- **Per-IP Demo Sandbox Sub-Limits**: Requests on public staging (`pharmatree.vercel.app`) without an `X-Tenant-Key` resolve to `demo-public-sandbox` partitioned by `(tenant_id, client_ip)`. A single user cannot exhaust the shared quota and starve recruiters.
-- **Vendor Custody Whitelist**: Enforces that the dispensing vendor address belongs to the tenant's authorized account whitelist (`isVendorAllowedForTenant`).
-- **Durable Neon Persistence**: Tenant records and quotas are stored in PostgreSQL tables `tenants` and `tenant_daily_quotas` (`ON CONFLICT DO UPDATE`), surviving serverless cold-starts.
-
-### 13.7 Anti-Replay Nonce Verification on Lockout Resets (`/api/pos/seal/reset`)
-- Administrative unlock challenges bind: `unitId`, explicit action `RESET_SEAL`, single-use `nonce`, and `timestamp`.
-- Nonces are recorded and atomically consumed via Neon table `used_reset_nonces` (`ON CONFLICT DO NOTHING RETURNING nonce`), preventing signature reuse within the 10-minute window.
-
-## 14. Threat Model & System Boundaries (What Blockchain Doesn't Solve)
-
-A decentralized ledger provides tamper-evident provenance and immutable audit trails, but it is not a silver bullet. Understanding the system's realistic trust boundaries is essential for real-world deployment:
-
-```mermaid
-flowchart TD
-    subgraph Physical_World["Physical Reality (Off-Chain)"]
-        RawMaterial["Active Pharmaceutical Ingredients (API)"]
-        Pills["Physical Medication & Packaging"]
-        TamperSeal["Physical Foil / Hologram"]
+    subgraph Blockchain["Ethereum Sepolia Consensus Layer"]
+        Forwarder["PharmaTreeForwarder.sol (ERC-2771 / EIP-712)"]
+        Contract["PharmaTree.sol (0xbD24...d72)"]
+        RBAC["Access Control Matrix"]
+        Ledger["Unit Registry & Conservation (ΣQ)"]
     end
 
-    subgraph The_Oracle_Gap["The 'Garbage In, Garbage Out' Gap"]
-        Gap["⚠️ Blockchain cannot chemically test physical pills.<br>Bad data entered by a malicious manufacturer remains immutably recorded."]
-    end
-
-    subgraph Blockchain_World["Digital Cryptographic State (On-Chain)"]
-        Genesis["UnitCreated(id, mfr)"]
-        Custody["Two-Party Handshake: Active -> Pending -> Accepted"]
-        TerminalSale["Dispensed: Status.Sold (Zero Double-Spend)"]
-    end
-
-    Physical_World -.-> Gap
-    Gap -.-> Blockchain_World
+    Scanner & Cashier --> NextApp
+    Consumer --> NextApp
+    NextApp --> RateLimit
+    NextApp --> Tenants & UsedNonces & Seals & Incidents
+    NextApp --> Relayer
+    Relayer -->|execute(fwdRequest)| Forwarder
+    Forwarder -->|Forward Call| Contract
+    Contract --> RBAC & Ledger
 ```
 
-### 14.1 The Physical-to-Digital Reality Gap ("Garbage In, Garbage Out")
-The blockchain guarantees that once an entry is recorded, it cannot be secretly altered or deleted. However, **it cannot verify whether physical substances placed inside a bottle match the registered metadata**. If an authorized manufacturer enters fraudulent batches at genesis, the ledger faithfully records the provenance of an illegitimate product. Regulatory oversight, laboratory inspections, and factory floor sensor oracles remain mandatory prerequisites.
+### Trust Boundary Specification:
+1. **Consensus Layer (Decentralized SSOT)**:
+   - Enforces Role-Based Access Control (`DEFAULT_ADMIN_ROLE`, `MANUFACTURER_ROLE`, `HANDLER_ROLE`).
+   - Guarantees strict non-repudiation and mass quantity conservation across splits and retail sales.
+   - Decoupled hot relayer (`0x335684Cfb813f673fed3f2bb87BF2778D4E96A72`) holds **zero smart contract roles**. A complete compromise of the relayer key cannot forge units, mint tokens, change roles, or sell third-party inventory.
+2. **Database & Edge Layer**:
+   - Manages durable daily transaction quotas (`tenant_daily_quotas`) to protect the relayer from gas exhaustion.
+   - Stores single-use reset nonces (`used_reset_nonces`) to eliminate signature replay during lockout clearance.
+   - Stores HMAC-SHA256 verifiers for scratch-off physical tamper seals (Tier 5).
+3. **Physical Packaging Layer**:
+   - Uses dual-layer packaging authentication: an external GS1 DataMatrix / QR code for supply-chain custody tracking, combined with a physical, scratch-off Crockford Base32 tamper-evident seal (Tier 5) to protect against visual QR photo-cloning.
 
-### 14.2 Physical Packaging Cloning vs. Digital Verification
-A physical QR code printed on cardboard can be photocopied. While PharmaTree detects replayed sales on-chain (preventing the same digital unit ID from being sold twice), a photocopied code on counterfeit packaging could deceive an unassisted consumer prior to the authentic item's sale. For complete defense, digital serialization must be paired with physical anti-tampering (such as tamper-evident break seals and cryptographically randomized scratch-off PINs).
+---
 
-### 14.3 State Machine for Inbound Shipments & Rejection
-When an inbound shipment is rejected due to suspected tampering or cold-chain excursion, the stock transitions to `Status.Rejected`:
+## 4. Smart Contract State Machine & Mass Conservation
+
+### 4.1 On-Chain Status Enum & State Transitions
+
+The smart contract defines four discrete states in `PharmaTree.sol`:
+```solidity
+enum Status { Active, PendingTransfer, Sold, Rejected }
+```
 
 ```mermaid
 stateDiagram-v2
-    [*] --> Active: Manufacturer Mints Unit
-    Active --> PendingTransfer: Sender calls initiateTransfer
-    PendingTransfer --> Active: Receiver calls acceptTransfer
-    PendingTransfer --> Rejected: Receiver calls rejectTransfer (damaged/tampered)
-    PendingTransfer --> Active: Sender calls cancelTransfer
-    Rejected --> Quarantined: Flagged in Incident Registry
-    Quarantined --> Destroyed: Physical Destruction Logged
-    Quarantined --> Active: QA Inspection Clearance
-    Active --> Sold: Dispensed at POS (Final State)
+    [*] --> Active: createRootUnit / createChildUnits
+    Active --> PendingTransfer: initiateTransfer / initiatePartialTransfer
+    PendingTransfer --> Active: acceptTransfer (Receiver takes custody)
+    PendingTransfer --> Rejected: rejectTransfer (Receiver flags damage/breach)
+    PendingTransfer --> Active: cancelTransfer (Sender cancels prior to acceptance)
+    Rejected --> Active: reclaimRejectedUnit (Sender reclaims after inspection)
+    Active --> Sold: markAsSold / sellQuantity (Terminal Sale)
     Sold --> [*]
 ```
 
-In production pharma operations, rejected items should not immediately be returned to general active inventory without formal QA clearance.
+### Transition Invariants:
+1. **`initiateTransfer`**: Only callable by `currentOwner`. Requires unit to be in `Status.Active` and receiver to hold an authorized role. Unit transitions to `Status.PendingTransfer`.
+2. **`acceptTransfer`**: Only callable by designated `pendingReceiver`. Sets `currentOwner = _msgSender()`, clears `pendingReceiver = address(0)`, and returns unit to `Status.Active`.
+3. **`rejectTransfer`**: Only callable by designated `pendingReceiver`. Sets `status = Status.Rejected` and clears `pendingReceiver = address(0)`. Ownership remains with the sender.
+4. **`cancelTransfer`**: Only callable by `currentOwner` while unit is `Status.PendingTransfer`. Clears `pendingReceiver` and returns unit to `Status.Active`.
+5. **`reclaimRejectedUnit`**: Only callable by `currentOwner` on a `Status.Rejected` unit. Moves unit from `Rejected` back to `Active` after formal inspection.
+6. **`markAsSold` / `sellQuantity`**: Only callable by `currentOwner` on an `Active` unit. Sets `Status.Sold`. Terminal state: sold units cannot be transferred or sold again.
 
-### 14.4 Public Ledger Privacy Trade-offs
-Because transactions occur on a public Ethereum network:
-- **Commercial Competitors**: Competitors can observe shipment quantities, transfer velocities, and wallet relationships between suppliers and distributors. Enterprise deployments should employ zero-knowledge proofs (e.g. zk-SNARKs) or private consortium subnets to conceal volume data while preserving verifiable proofs.
-- **Incident Telemetry**: POS incident logs collecting browser geolocation coordinates must adhere to healthcare data privacy standards (HIPAA / GDPR) by obfuscating exact pharmacy addresses.
+### 4.2 Exact Mathematical Mass Conservation Theorem
 
-### 14.5 Serverless Persistence Considerations
-In serverless environments (like Vercel), in-memory rate limiting and local `.data/*.json` files are ephemeral and reset across cold starts. Production deployment requires external persistence:
-- **Database**: PostgreSQL (e.g. Supabase, Neon) for permanent incident logs and scan telemetry.
-- **Rate Limiting**: Distributed Redis (e.g. Upstash) for synchronized cross-region IP rate limiting.
+Across all split operations, transfers, and retail sales, total pharmaceutical volume is strictly conserved:
 
-## 15. Security and public release
+$$\sum Q_{\text{initial}} = \sum Q_{\text{active}} + \sum Q_{\text{pending}} + \sum Q_{\text{rejected}} + \sum Q_{\text{sold}}$$
 
-- Keep all secrets in ignored local environment files (`.env`, `.env.local`).
-- Use placeholder values in committed templates (`.env.example`, `frontend/.env.local.example`).
-- Do not expose private keys in scripts, screenshots, logs, issues, or commits.
-- Use a dedicated test wallet for local and Sepolia automation.
-- In production, separate the hot gasless relayer wallet from administrative roles and govern the contract admin via a multi-signature safe (e.g., Safe).
+When a unit of quantity $Q$ is partially transferred ($q < Q$) or partially sold ($q < Q$):
+1. Parent unit quantity becomes $Q' = Q - q$.
+2. Newly minted child unit quantity becomes $q$.
+3. Total quantity is invariant: $Q' + q = (Q - q) + q = Q$.
 
-## 16. Author and project links
+This theorem is verified on-chain and tested via randomized property tests running 35 parallel operations in `backend/test/PosInvariants.test.ts`.
 
-**Ayon Moitra**
+---
 
-- GitHub: [@ayonm95](https://github.com/ayonm95)
-- Public Repository: [pharmatree](https://github.com/ayonm95/pharmatree)
-- Monorepo: [Pharma](https://github.com/ayonm95/Pharma)
-- LinkedIn: [Ayon Moitra](https://www.linkedin.com/in/ayon-moitra/)
+## 5. Application Workflows & Custody Handshakes
 
-This project is proprietary commercial software. All rights reserved. See [LICENSE](./LICENSE).
+### 5.1 Mutual Acceptance Handshake Protocol
+To eliminate unilateral stock dumping or false delivery claims:
+1. Sender initiates transfer on-chain via `initiatePartialTransfer(unitId, receiver, quantity)`.
+2. The unit enters `Status.PendingTransfer` with `pendingReceiver` recorded.
+3. Ownership does not transfer until the receiver calls `acceptTransfer(unitId)`.
+4. If damaged in transit, receiver calls `rejectTransfer(unitId)`, recording an immutable audit event (`TransferRejected`).
+
+---
+
+## 6. POS Dispensing Lifecycle, Signing & Reconciliation
+
+### 6.1 Transaction Signing Modes
+State-changing dispense operations (`markAsSold` / `sellQuantity`) require cryptographic authorization from the current unit owner:
+
+1. **Gasless Sponsored Mode (EIP-712 Meta-Transactions)**:
+   - The cashier's terminal generates an EIP-712 typed data message:
+     ```json
+     {
+       "types": {
+         "ForwardRequest": [
+           { "name": "from", "type": "address" },
+           { "name": "to", "type": "address" },
+           { "name": "value", "type": "uint256" },
+           { "name": "gas", "type": "uint256" },
+           { "name": "nonce", "type": "uint256" },
+           { "name": "deadline", "type": "uint48" },
+           { "name": "data", "type": "bytes" }
+         ]
+       }
+     }
+     ```
+   - Signed by the dispensary wallet.
+   - Submitted to `/api/pos/sell`.
+   - The unprivileged hot relayer verifies the signature against `PharmaTreeForwarder` and submits `forwarder.execute(fwdRequest)`, sponsoring the gas fee.
+2. **Direct Browser Wallet Fallback**:
+   - If the relayer is offline or depleted (< 0.001 ETH), `/api/pos/sell` returns `requiresClientSigning: true`.
+   - The terminal prompts the connected browser wallet (MetaMask) to broadcast the transaction directly.
+
+### 6.2 Mining Latency & Counter Reconciliation
+- **Verification Latency**: < 100 ms via parallel multi-endpoint RPC reads.
+- **Dispense Broadcast**: Submitted immediately upon cashier confirmation (`Spacebar` / `Enter`).
+- **Mining Window**: Ethereum Sepolia blocks mine in ~12 seconds.
+- **Optimistic UI with Reconciliation**:
+  1. The terminal optimistically detaches inventory locally, rendering a temporary pending receipt.
+  2. If the on-chain transaction succeeds, the receipt updates with the confirmed block number and transaction hash.
+  3. If the transaction reverts (e.g., gas spike, race condition), the terminal triggers an auditory warning chime, rolls back the local stock state to `Active`, and presents a one-click retry prompt.
+
+---
+
+## 7. 5-Tier Anti-Counterfeiting Engine
+
+Every scanned unit is audited across five sequential verification tiers (`frontend/src/lib/tierEvaluator.ts`):
+
+| Tier | Name | Evaluation Rule | Normal State | Failure State |
+| :---: | :--- | :--- | :--- | :--- |
+| **1** | **Genesis Registry** | $1 \le \text{unitId} \le \text{unitCounter}$ and $\text{manufacturer} \ne 0\text{x}0$ | Genuine genesis record | `UNREGISTERED_ID`: Forged QR code or fake batch |
+| **2** | **Anti-Replay** | $\text{status} \ne \text{Status.Sold}$ | Active unsold inventory | `ALREADY_SOLD_REPLAY`: Photocopied packaging QR |
+| **3** | **Custody Audit** | $\text{currentOwner} == \text{vendorAddress}$ or ($\text{status} == \text{Pending} \land \text{pendingReceiver} == \text{vendorAddress}$) | Authorized dispensary custody | `CUSTODY_MISMATCH`: Diverted or stolen inventory |
+| **4** | **Transit Integrity** | $\text{status} \ne \text{Status.Rejected}$ | Unbroken transit custody | `REJECTED_TRANSIT`: Compromised or damaged delivery |
+| **5** | **Tamper Seal** | Verifies 12-char Crockford Base32 secret against server HMAC verifier | Unopened intact packaging | `INVALID_SECRET` / `LOCKED_REVIEW`: Tampered packaging |
+
+---
+
+## 8. Dual-Scheme Tamper Seals (Physical 2FA)
+
+To defend against exterior packaging photocopies, PharmaTree binds the digital blockchain record to physical tear-tape scratch seals:
+
+### 8.1 Scheme 1: Production 12-Character Crockford Base32 HMAC
+- **Alphabet**: `0123456789ABCDEFGHJKMNPQRSTVWXYZ` (32 characters, excluding ambiguous glyphs `I, L, O, U`).
+- **Entropy**: $32^{12} \approx 1.15 \times 10^{18}$ possibilities.
+- **Verifier Generation**:
+  $$\text{Verifier} = \text{"v1:"} \parallel \text{HMAC-SHA256}(\text{SEAL\_PEPPER}, \text{unitId} \parallel ":" \parallel \text{normalize}(\text{secret}))$$
+- **Verification**: Evaluated in constant time using `crypto.timingSafeEqual`.
+- **Client-Scoped Exponential Backoff**: Failed guesses are tracked per `(unitId, clientIpHash)`:
+  - 1-2 failures: immediate retry.
+  - 3 failures: 30-second backoff.
+  - 4 failures: 2-minute backoff.
+  - 5 failures: 24-hour lockout (`LOCKED_REVIEW`).
+- **Manufacturer Unlock Challenge**: Unlock signatures require binding `(unitId, RESET_SEAL, nonce, timestamp)`. Nonces are atomically tracked and consumed in Neon table `used_reset_nonces`.
+
+### 8.2 Scheme 0: Legacy Testnet Shorthand (Deprecated)
+- 4-digit PIN matching `manufacturer.slice(-4)` (e.g. `1537`).
+- Strictly maintained for backward-compatibility with pre-seeded testnet units #1-#9. Deprecated for all new production units.
+
+---
+
+## 9. GS1 Digital Link & Barcode Standardization
+
+Packaging barcodes conform to GS1 Digital Link URI standards:
+$$\text{https://pharmatree.io/01/}\{GTIN\}/10/\{Lot\}/21/\{Serial\}?17=\{YYMMDD\}$$
+
+- **Application Identifiers**:
+  - `(01)`: GTIN-14 Global Trade Item Number with Modulo 10 Luhn check digit.
+  - `(10)`: Batch / Lot identifier.
+  - `(21)`: Serial number (128-bit unguessable high-entropy token).
+  - `(17)`: Expiration date in `YYMMDD` format.
+- **Optical 2D DataMatrix**: Built-in SVG synthesis using `bwip-js` conforming to GS1 healthcare marking regulations.
+
+---
+
+## 10. Multi-Tenant POS Authentication & Gas Throttling
+
+To operate securely as a multi-tenant SaaS while protecting the relayer from gas exhaustion:
+
+### 10.1 Authentication & Tier Quotas
+- Dispensaries supply an `X-Tenant-Key` HTTP header.
+- The raw key is hashed using SHA-256 and matched against authorized records in Neon table `tenants` or `PHARMA_TENANTS_CONFIG` using constant-time comparison.
+- **Tier Quota Matrix**:
+  - `sandbox` / `demo-public-sandbox`: 10 tx/day (partitioned per client IP to prevent evaluation starvation).
+  - `standard`: 100 tx/day.
+  - `enterprise`: 1,000 tx/day.
+- **Rate Headers**:
+  - `X-Tenant-ID`: Identifies active tenant context.
+  - `X-Tenant-Tier`: Returns tenant tier.
+  - `X-Tenant-Quota-Remaining`: Returns daily transactions remaining.
+
+---
+
+## 11. Smart Contract Function & Event Reference
+
+### 11.1 Core Functions (`PharmaTree.sol`)
+
+| Function | Visibility | Access / Modifiers | Description |
+| :--- | :--- | :--- | :--- |
+| `admin()` | `external view` | None | Returns contract administrator address |
+| `unitCounter()` | `external view` | None | Returns total number of registered units |
+| `addManufacturer(address _mfr)` | `external` | `onlyAdmin` | Grants `MANUFACTURER_ROLE` |
+| `addHandler(address _handler)` | `external` | `onlyAdmin` | Grants `HANDLER_ROLE` |
+| `createRootUnit(...)` | `external` | `onlyManufacturer` | Mints new top-level container/batch unit |
+| `createChildUnits(...)` | `external` | `onlyCurrentOwner` | Mints packed child units under active parent |
+| `initiatePartialTransfer(...)` | `external` | `onlyCurrentOwner` | Splits and transfers partial quantity to authorized receiver |
+| `acceptTransfer(uint256 _id)` | `external` | `pendingReceiver` | Accepts incoming transfer into active custody |
+| `rejectTransfer(uint256 _id)` | `external` | `pendingReceiver` | Rejects incoming shipment; sets `Status.Rejected` |
+| `cancelTransfer(uint256 _id)` | `external` | `onlyCurrentOwner` | Cancels pending transfer prior to receiver action |
+| `reclaimRejectedUnit(uint256 _id)`| `external` | `onlyCurrentOwner` | Restores rejected unit to active inventory after inspection |
+| `markAsSold(uint256 _id)` | `external` | `onlyCurrentOwner` | Marks entire active unit as sold (terminal state) |
+| `sellQuantity(uint256 _id, uint256 _qty)`| `external` | `onlyCurrentOwner` | Splits inventory; detaches sold child unit |
+| `getUnitDetails(uint256 _id)` | `external view` | None | Returns full unit tuple (parent, root, owner, status, quantity, etc.) |
+
+### 11.2 Emitted Events
+
+| Event | Indexed Parameters | Payload |
+| :--- | :--- | :--- |
+| `UnitCreated` | `uint256 indexed id`, `uint256 indexed parentId`, `address indexed owner` | `uint8 level` |
+| `TransferInitiated` | `uint256 indexed id`, `address indexed from`, `address indexed to` | None |
+| `TransferCompleted` | `uint256 indexed id`, `address indexed from`, `address indexed to` | None |
+| `TransferRejected` | `uint256 indexed id`, `address indexed from`, `address indexed rejectedBy` | None |
+| `TransferCancelled` | `uint256 indexed id`, `address indexed cancelledBy` | None |
+| `UnitReclaimed` | `uint256 indexed id`, `address indexed reclaimedBy` | None |
+| `UnitSold` | `uint256 indexed id`, `address indexed soldBy` | None |
+
+---
+
+## 12. API Endpoint & Status Code Reference
+
+| Endpoint | Method | Purpose | Authentication | Standard Status Codes |
+| :--- | :---: | :--- | :--- | :--- |
+| `/api/health` | `GET` | Infrastructure & relayer solvency monitoring | Public | `200 OK`, `503 Service Unavailable` |
+| `/api/pos/verify` | `POST` | 5-Tier anti-counterfeit audit | Optional `X-Tenant-Key` | `200 OK`, `400 Bad Request`, `429 Rate Limited`, `502 RPC Failover` |
+| `/api/pos/sell` | `POST` | Gasless relayer dispensing execution | Required `X-Tenant-Key` or Demo | `200 OK`, `400 Invalid Sig`, `403 Custody Mismatch`, `429 Quota Exceeded`, `503 Relayer Depleted` |
+| `/api/pos/incident` | `POST` | Forensic telemetry logging | Required `X-Tenant-Key` or Demo | `200 OK`, `401 Unauthorized`, `429 Rate Limited` |
+| `/api/pos/seal/reset`| `POST`| Administrative seal lockout reset | Manufacturer EIP-712 Signature | `200 OK`, `400 Invalid Nonce`, `403 Unauthorized`, `409 Replayed Signature` |
+| `/api/scan` | `POST` | Consumer verification telemetry | Rate-Limited Public | `200 OK`, `400 Bad Request`, `429 Rate Limited` |
+| `/api/units` | `GET` | Cursor-paginated indexed unit projections | Public | `200 OK`, `500 Server Error` |
+
+### Standard API Error Codes:
+- `RATE_LIMITED`: Sliding-window query threshold exceeded.
+- `UNAUTHORIZED_TENANT`: Invalid or absent `X-Tenant-Key`.
+- `UNAUTHORIZED_TENANT_VENDOR`: Scanned vendor address does not belong to authorized tenant whitelist.
+- `VENDOR_DAILY_QUOTA_EXCEEDED`: Daily 50 tx gasless allowance exhausted for specific vendor.
+- `DEMO_QUOTA_EXCEEDED`: Per-IP 10 tx/day public demonstration allowance exhausted.
+- `RELAYER_INSUFFICIENT_GAS`: Relayer balance dropped below circuit-breaker safety threshold (< 0.001 ETH).
+- `REPLAYED_SIGNATURE`: Cryptographic challenge nonce already consumed in database.
+- `LOCKED_REVIEW`: Tamper seal locked after 5 consecutive failed verification attempts.
+
+---
+
+## 13. Environment Configuration & Secrets Management
+
+Committed example templates:
+- Root / Backend: `.env.example`
+- Frontend: `frontend/.env.example`
+
+### Core Environment Variables:
+```env
+# Consensus & Smart Contracts (Sepolia)
+SEPOLIA_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
+SEPOLIA_CHAIN_ID=11155111
+SEPOLIA_CONTRACT_ADDRESS=0xbD245c7f7C8bF4A8Ec016e8C370D3e6931BeAd72
+TRUSTED_FORWARDER=0x2d24b5b481d0981AE7904790e9d8BF4c162b6c8c
+NEXT_PUBLIC_DEPLOYMENT_BLOCK=12032098
+
+# Gasless Relayer Hot Key (Unprivileged: 0 roles on PharmaTree)
+RELAYER_PRIVATE_KEY=your_unprivileged_relayer_private_key
+
+# Neon PostgreSQL Database
+DATABASE_URL=postgresql://user:password@endpoint.neon.tech/neondb?sslmode=require
+
+# Cryptographic Pepper for Tamper Seal HMAC
+SEAL_PEPPER=your-high-entropy-server-seal-pepper-secret
+
+# Distributed Rate Limiting (Upstash Redis)
+UPSTASH_REDIS_REST_URL=https://your-upstash-redis-endpoint.upstash.io
+UPSTASH_REDIS_REST_TOKEN=your_upstash_rest_token
+
+# IPFS Pinata Storage (Server-side only)
+PINATA_API_KEY=your_pinata_api_key
+PINATA_SECRET_API_KEY=your_pinata_secret_api_key
+```
+
+---
+
+## 14. Local Development & Deployment Workflows
+
+### Prerequisites
+- **Node.js**: `>= 20.9.0 (LTS)` (Required by Next.js 16)
+- **MetaMask**: Configured for Sepolia testnet
+
+```bash
+# Install all dependencies
+cd backend && npm install && cd ../frontend && npm install && cd ..
+
+# Compile smart contracts
+npm run compile
+
+# Run local Hardhat node
+cd backend && npx hardhat node
+
+# Deploy locally
+cd backend && npx hardhat run scripts/deploy.ts --network localhost
+
+# Start frontend dev server
+npm run dev
+```
+
+---
+
+## 15. Automated Testing & Invariant Validation
+
+The monorepo features **107 passing automated tests** across 10 test suites (65 Hardhat contract & invariant tests + 42 Vitest frontend API security & evaluator tests):
+
+```bash
+# Run all smart contract, invariant, and GS1 tests (65 tests)
+npm test
+
+# Run frontend API security, tenant auth, and evaluator tests (42 tests)
+npm run test:frontend
+
+# Run full test suite across both packages
+npm run test:all
+
+# Run linter and type-checking
+npm run lint
+
+# Run production Next.js Turbopack build
+npm run build
+```
+
+### Statement Coverage:
+```text
+--------------------------|----------|----------|----------|----------|----------------|
+File                      |  % Stmts | % Branch |  % Funcs |  % Lines |Uncovered Lines |
+--------------------------|----------|----------|----------|----------|----------------|
+ contracts/               |    93.59 |    72.37 |    82.14 |    93.58 |                |
+  PharmaTree.sol          |    93.59 |    72.37 |    81.48 |    93.58 |... 271,285,305 |
+  PharmaTreeForwarder.sol |      100 |      100 |      100 |      100 |                |
+--------------------------|----------|----------|----------|----------|----------------|
+```
+
+---
+
+## 16. Comprehensive Threat Model Matrix
+
+| Threat Vector | Severity | Attack Scenario | Implemented Defense Mechanism |
+| :--- | :---: | :--- | :--- |
+| **Hot Relayer Compromise** | Critical | Attacker extracts `RELAYER_PRIVATE_KEY` | **Zero Roles**: Relayer holds 0 contract roles. Cannot mint, alter roles, or sell third-party stock without signed EIP-712 forward requests. |
+| **Double-Dispensing Replay** | High | Photocopied QR sticker on counterfeit carton | **On-Chain Lifecycle & Tier 5**: Status locks to `Status.Sold`. Subsequent dispense attempts revert. Scratched tamper seal exposes reuse. |
+| **Custody Diversion & Theft** | High | Diverted inventory sold outside authorized channel | **Mutual Handshake (Tier 3)**: POS validates `unit.currentOwner == vendorAddress`. Incoming pending shipments display as in-transit. |
+| **Sequential ID Scanning** | Medium | Attacker guesses unsold IDs (1..N) to print fake stickers | **GS1 Unguessable Serials & Tier 5**: Digital Link encodes 128-bit random serial AI(21). Physical packaging requires intact scratch seal. |
+| **Phishing / Lookalike Domains**| Medium | Counterfeiter prints QR pointing to fake verify domain | **Direct POS App Ingestion & DNSSEC**: POS scanners bypass QR hostnames to query pre-configured APIs. Web portal secured via DNSSEC and TLS. |
+| **Gasless Relayer DoS** | Medium | Malicious client exhausts relayer native gas | **Tiered Daily Quotas**: Strict per-tenant and per-IP sub-limits, Upstash sliding-window rate limit, and 0.001 ETH balance circuit breaker. |
+| **Lockout Reset Signature Replay** | Low | Replay of manufacturer unlock signature in 10m window | **Atomic Single-Use Nonces**: Challenges bind `(unitId, RESET_SEAL, nonce, timestamp)`. Nonces consumed in `used_reset_nonces`. |
+| **Physical Pill Substitution** | Inherent | Counterfeiter opens authentic box, swaps pills, reseals | **Scratch-Off Tamper Seals**: Concealed 12-char Crockford secret destroyed upon initial unboxing; cannot be reconstructed once scratched. |
+
+---
+
+## 17. Physical Reality Gap & Known Limitations
+
+1. **"Garbage In, Garbage Out"**: The blockchain ledger guarantees that once data is recorded, it cannot be altered. It cannot independently perform chemical spectrometry on physical pills; initial data fidelity relies on certified manufacturer credentials and Good Manufacturing Practice (GMP) compliance audits.
+2. **Testnet Finality**: Deployed on Ethereum Sepolia testnet. Transaction confirmations require ~12 seconds.
+3. **Public Ledger Data Exposure**: On-chain transfer events are publicly inspectable on Sepolia. Enterprise deployments should employ zero-knowledge proofs (e.g. zk-SNARKs) to conceal transaction volumes from commercial competitors.
+
+---
+
+## 18. Author & License Notice
+
+Copyright (c) 2026 Ayon Moitra. All Rights Reserved.
+
+This software, its smart contracts, backend services, and documentation are proprietary commercial property. See [LICENSE](LICENSE) for full licensing terms.

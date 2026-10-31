@@ -515,10 +515,10 @@ function VerifyContent() {
     const isReplay = Boolean(scanData && scanData.scanCount > 1);
     if (isReplay) {
       verdict = {
-        title: `🚨 COUNTERFEIT WARNING: CLONED QR REPLAY (${scanData?.scanCount} Scans Detected)`,
-        description: `This packaging QR code was already marked as SOLD on-chain and has now been scanned ${scanData?.scanCount} times. If you did not personally purchase this from the registered pharmacy or are holding an unpurchased box, REJECT IT AS IT IS — this packaging QR may be a cloned counterfeit duplicate sticker!`,
-        variant: "danger",
-        icon: XCircle,
+        title: `⚠️ Dispensed Packaging Advisory: Repeat Scan (${scanData?.scanCount} Scans)`,
+        description: `This packaging was officially dispensed and sold on-chain. It has been scanned ${scanData?.scanCount} times. Repeat scans are common when reviewing dosage instructions or sharing with caregivers. If you are examining an unpurchased or unopened box, inspect the scratch-off tamper seal below or verify with your dispensing pharmacist.`,
+        variant: "warning",
+        icon: AlertTriangle,
       };
     } else {
       verdict = {
@@ -1099,7 +1099,7 @@ function VerifyContent() {
                       fontSize: "10px",
                       color:
                         isSold && scanData && scanData.scanCount > 1
-                          ? "var(--color-danger)"
+                          ? "var(--color-warning, #f59e0b)"
                           : isSold
                           ? "var(--color-success)"
                           : "var(--color-text-muted)",
@@ -1107,7 +1107,7 @@ function VerifyContent() {
                     }}
                   >
                     {isSold && scanData && scanData.scanCount > 1
-                      ? "⚠️ REJECT AS CLONED"
+                      ? "⚠️ Dispensed Unit (Rescanned)"
                       : isSold
                       ? "✓ Authentic Patient Unit"
                       : "Unpurchased Unit"}

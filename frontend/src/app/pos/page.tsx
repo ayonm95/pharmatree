@@ -1411,7 +1411,7 @@ export default function VendorPosPage() {
                                       <div style={{ display: "flex", gap: "var(--space-2)" }}>
                                         <input
                                           type="text"
-                                          placeholder={`Enter scratch secret code (or PIN: ${currentVerification.unit?.manufacturer.slice(-4) || "1537"})`}
+                                          placeholder="Enter 12-char scratch seal secret (e.g. 7X9K-2M4N-PQ8W)"
                                           value={scratchSecret}
                                           onChange={(e) => setScratchSecret(e.target.value)}
                                           style={{

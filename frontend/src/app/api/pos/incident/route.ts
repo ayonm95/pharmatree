@@ -7,6 +7,7 @@ import {
   sanitizeInputString,
 } from "@/lib/rateLimit";
 import { saveIncidentReport, getIncidentsList, DbIncidentReport } from "@/lib/db";
+import { resolveTenantFromHeadersAsync } from "@/lib/tenantAuth";
 
 export async function GET(req: NextRequest) {
   const rateLimit = await checkRateLimitAsync(req, {
@@ -48,6 +49,20 @@ export async function POST(req: NextRequest) {
     return NextResponse.json(
       { success: false, error: "RATE_LIMITED", message: "Incident reporting threshold reached." },
       { status: 429, headers: rateHeaders }
+    );
+  }
+
+  const allowDemo = process.env.STRICT_TENANT_AUTH !== "true";
+  const tenantAuth = await resolveTenantFromHeadersAsync(req.headers, { allowDemoFallback: allowDemo });
+  if (tenantAuth.authenticated && tenantAuth.tenant) {
+    rateHeaders["X-Tenant-ID"] = tenantAuth.tenant.id;
+    rateHeaders["X-Tenant-Tier"] = tenantAuth.tenant.tier;
+  }
+
+  if (!tenantAuth.authenticated) {
+    return NextResponse.json(
+      { success: false, error: "UNAUTHORIZED_TENANT", message: tenantAuth.error || "Valid X-Tenant-Key required" },
+      { status: 401, headers: rateHeaders }
     );
   }
 

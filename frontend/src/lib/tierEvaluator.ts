@@ -144,9 +144,21 @@ export function evaluateTiers(input: EvaluateTiersInput): EvaluateTiersResult {
   // 4. Tier 3: Custody & Diversion Audit
   let isOwnStock = true;
   let diversionDetected = false;
-  if (vendorAddress && unit.currentOwner.toLowerCase() !== vendorAddress.toLowerCase()) {
-    isOwnStock = false;
-    diversionDetected = true;
+  let message = "Unit verified authentic on-chain.";
+
+  if (vendorAddress) {
+    const isOwner = unit.currentOwner.toLowerCase() === vendorAddress.toLowerCase();
+    const isIncomingPending =
+      unit.status === 1 &&
+      Boolean(unit.pendingReceiver) &&
+      unit.pendingReceiver.toLowerCase() === vendorAddress.toLowerCase();
+
+    if (!isOwner && !isIncomingPending) {
+      isOwnStock = false;
+      diversionDetected = true;
+    } else if (isIncomingPending) {
+      message = "Unit in transit: Dispatched and awaiting delivery acceptance by this pharmacy.";
+    }
   }
 
   // 5. Tier 5: Tamper Seal Verification
@@ -177,7 +189,7 @@ export function evaluateTiers(input: EvaluateTiersInput): EvaluateTiersResult {
     authentic: true,
     tierFailed: null,
     reason: null,
-    message: "Unit verified authentic on-chain.",
+    message,
     tiers: {
       tier1_registered: true,
       tier2_unsold: unit.status === 0,

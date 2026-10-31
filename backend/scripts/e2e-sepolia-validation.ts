@@ -10,7 +10,8 @@ interface ValidationResult {
 
 async function main() {
   console.log("======================================================================");
-  console.log("         PHARMATREE E2E SEPOLIA INVARIANT VALIDATION SUITE            ");
+  console.log("     PHARMATREE LIVE SEPOLIA SMOKE & FIXTURE VALIDATION SUITE        ");
+  console.log("   (Verifies Live Sepolia Deployment & Pre-Seeded Fixtures #1-#10)    ");
   console.log("======================================================================");
 
   const contractAddress = process.env.SEPOLIA_CONTRACT_ADDRESS || "0xbD245c7f7C8bF4A8Ec016e8C370D3e6931BeAd72";
