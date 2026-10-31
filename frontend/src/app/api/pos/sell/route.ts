@@ -14,6 +14,11 @@ import {
   parseSafePositiveInt,
 } from "@/lib/rateLimit";
 import { withRelayerLock } from "@/lib/db";
+import {
+  resolveTenantFromHeaders,
+  isVendorAllowedForTenant,
+  checkTenantDailyQuota,
+} from "@/lib/tenantAuth";
 
 /**
  * Execute an on-chain transaction with dynamic pending nonce resolution and jittered retry backoff.
@@ -73,6 +78,30 @@ export async function POST(req: NextRequest) {
       }
     );
   }
+
+  // 2. Multi-Tenant Authentication & Access Policy
+  const allowDemoFallback = process.env.STRICT_TENANT_AUTH !== "true";
+  const tenantResolution = resolveTenantFromHeaders(req.headers, { allowDemoFallback });
+
+  if (!tenantResolution.authenticated || !tenantResolution.tenant) {
+    return NextResponse.json(
+      {
+        success: false,
+        error: tenantResolution.error || "UNAUTHORIZED",
+        message:
+          tenantResolution.message ||
+          "Valid X-Tenant-Key or Authorization Bearer token required to access POS endpoints.",
+      },
+      {
+        status: 401,
+        headers: rateHeaders,
+      }
+    );
+  }
+
+  const tenant = tenantResolution.tenant;
+  rateHeaders["X-Tenant-ID"] = tenant.id;
+  rateHeaders["X-Tenant-Tier"] = tenant.tier;
 
   try {
     const body = await req.json();
@@ -136,7 +165,33 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 3. Check Relayer Key Configuration
+    // 3. Multi-Tenant Vendor Whitelist & Tenant Gas Quota
+    if (!isVendorAllowedForTenant(tenant, currentOwner)) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "UNAUTHORIZED_TENANT_VENDOR",
+          message: `Unit owner (${currentOwner}) is not authorized under tenant '${tenant.name}'.`,
+        },
+        { status: 403, headers: rateHeaders }
+      );
+    }
+
+    const tenantQuota = await checkTenantDailyQuota(tenant.id, tenant.dailyQuota);
+    rateHeaders["X-Tenant-Quota-Remaining"] = String(tenantQuota.remaining);
+
+    if (!tenantQuota.allowed) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: "TENANT_DAILY_QUOTA_EXCEEDED",
+          message: `Daily transaction quota exceeded for tenant '${tenant.name}' (${tenant.dailyQuota} tx/day limit). Contact sales to upgrade your tier.`,
+        },
+        { status: 429, headers: rateHeaders }
+      );
+    }
+
+    // 4. Check Relayer Key Configuration
     const relayerKey = process.env.RELAYER_PRIVATE_KEY?.trim();
     if (!relayerKey) {
       return NextResponse.json(
@@ -243,6 +298,12 @@ export async function POST(req: NextRequest) {
           remainingQuantity: unitQuantity - dispenseQty,
           isFractional: dispenseQty < unitQuantity,
           quotaRemaining: quota.remaining,
+          tenant: {
+            id: tenant.id,
+            name: tenant.name,
+            tier: tenant.tier,
+            quotaRemaining: tenantQuota.remaining,
+          },
           timestamp: Math.floor(Date.now() / 1000),
         },
         { headers: rateHeaders }
@@ -293,6 +354,12 @@ export async function POST(req: NextRequest) {
         dispensedQuantity: dispenseQty,
         remainingQuantity: unitQuantity - dispenseQty,
         isFractional: dispenseQty < unitQuantity,
+        tenant: {
+          id: tenant.id,
+          name: tenant.name,
+          tier: tenant.tier,
+          quotaRemaining: tenantQuota.remaining,
+        },
         timestamp: Math.floor(Date.now() / 1000),
       },
       { headers: rateHeaders }

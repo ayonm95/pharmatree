@@ -218,6 +218,14 @@ export async function initDbSchema(): Promise<void> {
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
       );
 
+      CREATE TABLE IF NOT EXISTS tenant_daily_quotas (
+        quota_key VARCHAR(128) PRIMARY KEY,
+        tenant_id VARCHAR(64) NOT NULL,
+        tx_count INTEGER NOT NULL DEFAULT 1,
+        day_date DATE NOT NULL DEFAULT CURRENT_DATE,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+
       -- Ensure multi-contract scoping columns exist on existing deployments
       ALTER TABLE units ADD COLUMN IF NOT EXISTS contract_address VARCHAR(42) DEFAULT '0xbd245c7f7c8bf4a8ec016e8c370d3e6931bead72';
       ALTER TABLE unit_events ADD COLUMN IF NOT EXISTS contract_address VARCHAR(42) DEFAULT '0xbd245c7f7c8bf4a8ec016e8c370d3e6931bead72';
@@ -974,6 +982,7 @@ export async function upsertSealRecord(record: DbSealRecord): Promise<void> {
 
 const inMemoryClientLocks: Record<string, { failedAttempts: number; lockedUntil?: string | null }> = {};
 const inMemoryVendorDailyQuotas: Record<string, number> = {};
+const inMemoryTenantDailyQuotas: Record<string, number> = {};
 
 export function calculateSealBackoffMs(attempts: number): number {
   if (attempts < 3) return 0;
@@ -1219,4 +1228,56 @@ export async function checkAndIncrementVendorQuotaDb(
     count,
     remaining: Math.max(0, limit - count),
   };
+}
+
+/**
+ * Checks and increments the daily transaction/gas quota for an authenticated SaaS tenant
+ * Supported by Neon PostgreSQL table `tenant_daily_quotas` with atomic ON CONFLICT DO UPDATE
+ */
+export async function checkAndIncrementTenantQuotaDb(
+  tenantId: string,
+  limit = 50
+): Promise<{ allowed: boolean; count: number; remaining: number }> {
+  const cleanTenant = tenantId.toLowerCase().trim();
+  const dayKey = `tenant-daily:${cleanTenant}:${new Date().toISOString().slice(0, 10)}`;
+
+  if (neonPool) {
+    await initDbSchema();
+    try {
+      const res = await neonPool.query(
+        `INSERT INTO tenant_daily_quotas (quota_key, tenant_id, tx_count, day_date, updated_at)
+         VALUES ($1, $2, 1, CURRENT_DATE, NOW())
+         ON CONFLICT (quota_key) DO UPDATE SET
+           tx_count = tenant_daily_quotas.tx_count + 1,
+           updated_at = NOW()
+         RETURNING tx_count;`,
+        [dayKey, cleanTenant]
+      );
+      const count = Number(res.rows[0].tx_count);
+      return {
+        allowed: count <= limit,
+        count,
+        remaining: Math.max(0, limit - count),
+      };
+    } catch (err) {
+      console.warn("[Database] Postgres checkAndIncrementTenantQuotaDb failed, falling back:", err);
+    }
+  }
+
+  const count = (inMemoryTenantDailyQuotas[dayKey] || 0) + 1;
+  inMemoryTenantDailyQuotas[dayKey] = count;
+  return {
+    allowed: count <= limit,
+    count,
+    remaining: Math.max(0, limit - count),
+  };
+}
+
+/**
+ * Reset in-memory tenant quotas (used in tests)
+ */
+export function resetInMemoryTenantQuotas(): void {
+  for (const k of Object.keys(inMemoryTenantDailyQuotas)) {
+    delete inMemoryTenantDailyQuotas[k];
+  }
 }

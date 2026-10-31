@@ -123,6 +123,7 @@ export default function VendorPosPage() {
     remainingQty: number;
   } | null>(null);
   const [incidentLoggedId, setIncidentLoggedId] = useState<string | null>(null);
+  const [tenantInfo, setTenantInfo] = useState<{ id: string; tier: string; quotaRemaining?: number } | null>(null);
 
   // Recent scan history during this shift
   const [scanHistory, setScanHistory] = useState<ScanActivityItem[]>([]);
@@ -175,14 +176,29 @@ export default function VendorPosPage() {
       setIsVerifying(true);
 
       try {
+        const tenantKey = typeof window !== "undefined" ? localStorage.getItem("pharma_tenant_key") : null;
+        const reqHeaders: Record<string, string> = { "Content-Type": "application/json" };
+        if (tenantKey) reqHeaders["X-Tenant-Key"] = tenantKey;
+
         const res = await fetch("/api/pos/verify", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: reqHeaders,
           body: JSON.stringify({
             unitId: numId,
             vendorAddress: activeVendorAddress,
           }),
         });
+
+        const tId = res.headers.get("x-tenant-id");
+        const tTier = res.headers.get("x-tenant-tier");
+        const tQuota = res.headers.get("x-tenant-quota-remaining");
+        if (tId) {
+          setTenantInfo({
+            id: tId,
+            tier: tTier || "sandbox",
+            quotaRemaining: tQuota !== null ? Number(tQuota) : undefined,
+          });
+        }
 
         const data: VerificationResult = await res.json();
         setCurrentVerification(data);
@@ -329,9 +345,13 @@ export default function VendorPosPage() {
     setIsDispensing(true);
 
     try {
+      const tenantKey = typeof window !== "undefined" ? localStorage.getItem("pharma_tenant_key") : null;
+      const reqHeaders: Record<string, string> = { "Content-Type": "application/json" };
+      if (tenantKey) reqHeaders["X-Tenant-Key"] = tenantKey;
+
       const res = await fetch("/api/pos/sell", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: reqHeaders,
         body: JSON.stringify({
           unitId,
           quantity: dispenseQty,
@@ -339,6 +359,17 @@ export default function VendorPosPage() {
           scratchSecret,
         }),
       });
+
+      const tId = res.headers.get("x-tenant-id");
+      const tTier = res.headers.get("x-tenant-tier");
+      const tQuota = res.headers.get("x-tenant-quota-remaining");
+      if (tId) {
+        setTenantInfo({
+          id: tId,
+          tier: tTier || "sandbox",
+          quotaRemaining: tQuota !== null ? Number(tQuota) : undefined,
+        });
+      }
 
       const data = await res.json();
 
@@ -462,9 +493,13 @@ export default function VendorPosPage() {
   async function handleVerifyTamperPin() {
     if (!currentVerification?.unit || !scratchSecret.trim()) return;
     try {
+      const tenantKey = typeof window !== "undefined" ? localStorage.getItem("pharma_tenant_key") : null;
+      const reqHeaders: Record<string, string> = { "Content-Type": "application/json" };
+      if (tenantKey) reqHeaders["X-Tenant-Key"] = tenantKey;
+
       const res = await fetch("/api/pos/verify", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: reqHeaders,
         body: JSON.stringify({
           unitId: currentVerification.unit.id,
           scratchSecret: scratchSecret.trim(),
@@ -611,6 +646,25 @@ export default function VendorPosPage() {
             }}
           >
             POS Scanner
+          </span>
+          <span
+            style={{
+              backgroundColor: "var(--color-bg-surface-2, rgba(255, 255, 255, 0.05))",
+              color: "var(--color-text-secondary, #94a3b8)",
+              border: "1px solid var(--color-border-subtle, rgba(255, 255, 255, 0.1))",
+              fontSize: "var(--text-xs)",
+              padding: "2px 8px",
+              borderRadius: "var(--radius-pill)",
+              fontWeight: 600,
+              letterSpacing: "0.02em",
+            }}
+            title="Tenant Authentication & Daily Gas Quota"
+          >
+            {tenantInfo
+              ? `Tenant: ${tenantInfo.tier === "sandbox" ? "Demo Sandbox" : tenantInfo.id}${
+                  tenantInfo.quotaRemaining !== undefined ? ` (${tenantInfo.quotaRemaining} tx left)` : ""
+                }`
+              : "Tenant: Demo Sandbox (Sepolia)"}
           </span>
         </div>
 

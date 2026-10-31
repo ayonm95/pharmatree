@@ -18,6 +18,7 @@ import {
 import { recordScanAtomic, getSealRecord } from "@/lib/db";
 import { evaluateTiers } from "@/lib/tierEvaluator";
 import { verifyUnitSeal } from "@/lib/sealVerifier";
+import { resolveTenantFromHeaders } from "@/lib/tenantAuth";
 
 export async function POST(req: NextRequest) {
   // Rate limiting: 120 verification queries/min per IP
@@ -37,6 +38,14 @@ export async function POST(req: NextRequest) {
       },
       { status: 429, headers: rateHeaders }
     );
+  }
+
+  // Multi-Tenant Context Resolution
+  const allowDemoFallback = process.env.STRICT_TENANT_AUTH !== "true";
+  const tenantResolution = resolveTenantFromHeaders(req.headers, { allowDemoFallback });
+  if (tenantResolution.authenticated && tenantResolution.tenant) {
+    rateHeaders["X-Tenant-ID"] = tenantResolution.tenant.id;
+    rateHeaders["X-Tenant-Tier"] = tenantResolution.tenant.tier;
   }
 
   try {

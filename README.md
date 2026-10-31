@@ -321,7 +321,7 @@ To balance security rigor with retail dispensary throughput, PharmaTree defines 
 
 ## 🧪 Comprehensive Test Suite (82 Automated Tests Passing)
 
-The monorepo features **82 passing automated tests** (65 Hardhat contract & invariant tests + 17 Vitest frontend API security tests) and **93.59% Solidity statement coverage** across 8 test suites:
+The monorepo features **97 passing automated tests** (65 Hardhat contract & invariant tests + 32 Vitest frontend API security & tenant auth tests) and **93.59% Solidity statement coverage** across 9 test suites:
 
 ```bash
 # Run all smart contract, invariant, and cryptographic seal tests

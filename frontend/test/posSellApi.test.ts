@@ -1,5 +1,13 @@
 import { describe, it, expect } from "vitest";
 import { ethers } from "ethers";
+import {
+  resolveTenantFromHeaders,
+  isVendorAllowedForTenant,
+  checkTenantDailyQuota,
+  registerTenantInMemory,
+  hashApiKey,
+  TenantRecord,
+} from "../src/lib/tenantAuth";
 
 describe("POS Sell API Security Policies", () => {
   it("should enforce relayer minimum balance circuit breaker threshold (< 0.001 ETH)", () => {
@@ -37,5 +45,60 @@ describe("POS Sell API Security Policies", () => {
     };
 
     expect(forwardRequest.from.toLowerCase()).toBe(pharmacyAddress.toLowerCase());
+  });
+
+  describe("POS Multi-Tenant Authentication & Quota Integration", () => {
+    it("should allow public sandbox demo on Vercel preview/staging without X-Tenant-Key", () => {
+      const headers = new Headers();
+      const auth = resolveTenantFromHeaders(headers, { allowDemoFallback: true });
+
+      expect(auth.authenticated).toBe(true);
+      expect(auth.tenant?.id).toBe("demo-public-sandbox");
+      expect(auth.tenant?.tier).toBe("sandbox");
+      expect(auth.tenant?.dailyQuota).toBe(10);
+    });
+
+    it("should reject unauthenticated request when strict tenant auth is active", () => {
+      const headers = new Headers();
+      const auth = resolveTenantFromHeaders(headers, { allowDemoFallback: false });
+
+      expect(auth.authenticated).toBe(false);
+      expect(auth.error).toBe("MISSING_TENANT_KEY");
+    });
+
+    it("should block dispense when current unit owner does not match tenant authorized vendors", () => {
+      const authorizedDispensary = "0xe88a5608b536bcc9d557823234baca9a00f2540b";
+      const rogueDispensary = "0x3333333333333333333333333333333333333333";
+
+      const tenant: TenantRecord = {
+        id: "tenant-hospital-a",
+        name: "Hospital Pharmacy A",
+        apiKeyHash: "hash",
+        tier: "enterprise",
+        dailyQuota: 500,
+        allowedVendors: [authorizedDispensary],
+        status: "active",
+      };
+
+      expect(isVendorAllowedForTenant(tenant, authorizedDispensary)).toBe(true);
+      expect(isVendorAllowedForTenant(tenant, rogueDispensary)).toBe(false);
+    });
+
+    it("should reject transaction when tenant daily quota is exceeded", async () => {
+      const tenantId = "tenant-depleted-quota";
+      const limit = 2;
+
+      const q1 = await checkTenantDailyQuota(tenantId, limit);
+      expect(q1.allowed).toBe(true);
+      expect(q1.remaining).toBe(1);
+
+      const q2 = await checkTenantDailyQuota(tenantId, limit);
+      expect(q2.allowed).toBe(true);
+      expect(q2.remaining).toBe(0);
+
+      const q3 = await checkTenantDailyQuota(tenantId, limit);
+      expect(q3.allowed).toBe(false);
+      expect(q3.remaining).toBe(0);
+    });
   });
 });
