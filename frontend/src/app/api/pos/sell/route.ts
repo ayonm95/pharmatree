@@ -3,6 +3,7 @@ import { ethers } from "ethers";
 import {
   PHARMA_TREE_ABI,
   PHARMA_TREE_CONTRACT,
+  PHARMA_TREE_CHAIN_ID,
   PHARMA_TREE_FORWARDER_ABI,
   PHARMA_TREE_FORWARDER_CONTRACT,
 } from "@/lib/pharmaTree";
@@ -471,8 +472,114 @@ export async function POST(req: NextRequest) {
     }
 
     // 6. Direct Relayer Execution (Self-Owned Units Only)
-    // Since the relayer holds zero roles, third-party sales MUST use EIP-712 forwardRequest
+    // Since the relayer holds zero roles, third-party sales MUST use EIP-712 forwardRequest.
     if (currentOwner.toLowerCase() !== relayerWallet.address.toLowerCase()) {
+      // In demo sandbox mode, check if server has demo dispenser key configured for zero-friction evaluation
+      const demoDispenserKey = (process.env.DEMO_DISPENSER_KEY || process.env.SEPOLIA_PRIVATE_KEY_MANUFACTURER)?.trim();
+      const isDemoSandbox = process.env.DEMO_SANDBOX_ENABLED === "true";
+
+      if (isDemoSandbox && demoDispenserKey && PHARMA_TREE_FORWARDER_CONTRACT) {
+        try {
+          const demoOwnerWallet = new ethers.Wallet(demoDispenserKey, provider);
+          if (demoOwnerWallet.address.toLowerCase() === currentOwner.toLowerCase()) {
+            const forwarder = new ethers.Contract(
+              PHARMA_TREE_FORWARDER_CONTRACT,
+              PHARMA_TREE_FORWARDER_ABI,
+              relayerWallet
+            );
+            const currentNonce = await forwarder.nonces(demoOwnerWallet.address);
+
+            const childSerial = body.childSerial
+              ? normalizeSerial(body.childSerial)
+              : generateSecureSerial(20);
+            const childSerialHash = ethers.keccak256(ethers.toUtf8Bytes(normalizeSerial(childSerial)));
+
+            const iface = new ethers.Interface(PHARMA_TREE_ABI);
+            const calldata =
+              dispenseQty === unitQuantity
+                ? iface.encodeFunctionData("markAsSold", [unitId])
+                : iface.encodeFunctionData("sellQuantityWithSerialHash", [unitId, dispenseQty, childSerialHash]);
+
+            const domain = {
+              name: "PharmaTreeForwarder",
+              version: "1",
+              chainId: PHARMA_TREE_CHAIN_ID,
+              verifyingContract: PHARMA_TREE_FORWARDER_CONTRACT,
+            };
+
+            const types = {
+              ForwardRequest: [
+                { name: "from", type: "address" },
+                { name: "to", type: "address" },
+                { name: "value", type: "uint256" },
+                { name: "gas", type: "uint256" },
+                { name: "nonce", type: "uint256" },
+                { name: "deadline", type: "uint48" },
+                { name: "data", type: "bytes" },
+              ],
+            };
+
+            const reqObj = {
+              from: demoOwnerWallet.address,
+              to: PHARMA_TREE_CONTRACT,
+              value: 0,
+              gas: 350000,
+              nonce: Number(currentNonce),
+              deadline: Math.floor(Date.now() / 1000) + 3600,
+              data: calldata,
+            };
+
+            const signature = await demoOwnerWallet.signTypedData(domain, types, reqObj);
+            const requestStruct = {
+              from: reqObj.from,
+              to: reqObj.to,
+              value: reqObj.value,
+              gas: reqObj.gas,
+              deadline: reqObj.deadline,
+              data: reqObj.data,
+              signature,
+            };
+
+            await forwarder.execute.staticCall(requestStruct);
+
+            if (idempotencyKey) {
+              await recordSaleSubmitted(idempotencyKey, unitId, dispenseQty);
+            }
+
+            const tx = await withRelayerLock(() =>
+              executeWithNonceRetry(relayerWallet, (nonce) => forwarder.execute(requestStruct, { nonce }))
+            );
+            const receipt = await tx.wait(1);
+
+            const soldUnitId = extractSoldUnitId(receipt, unitId);
+            const responsePayload = {
+              success: true,
+              relayed: true,
+              txHash: tx.hash,
+              blockNumber: receipt?.blockNumber,
+              unitId,
+              soldUnitId,
+              childSerial: dispenseQty < unitQuantity ? childSerial : undefined,
+              dispensedQuantity: dispenseQty,
+              remainingQuantity: unitQuantity - dispenseQty,
+              isFractional: dispenseQty < unitQuantity,
+              tenant: {
+                id: tenant.id,
+                tier: tenant.tier,
+              },
+            };
+
+            if (idempotencyKey) {
+              await recordSaleCompleted(idempotencyKey, tx.hash, responsePayload);
+            }
+
+            return NextResponse.json(responsePayload, { headers: rateHeaders });
+          }
+        } catch (sandboxErr: any) {
+          console.warn("[Demo Sandbox] EIP-712 auto-signing error:", sandboxErr?.message || sandboxErr);
+        }
+      }
+
       return NextResponse.json(
         {
           success: false,

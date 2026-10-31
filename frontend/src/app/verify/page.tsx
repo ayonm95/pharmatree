@@ -59,6 +59,13 @@ type UnitRecord = {
   isExpired?: boolean;
 };
 
+const KNOWN_DEMO_DATA: Record<number, { serial: string; sealCode: string; name: string }> = {
+  1: { serial: "CD360DWJZHAXPCNRDVF7", sealCode: "P5NS8WJK6RAK", name: "Paracetamol (Active)" },
+  2: { serial: "SGGJ9W55VG8HTN8N0NMM", sealCode: "NBHVG59Y348R", name: "Amoxicillin (Sold)" },
+  8: { serial: "B8N2XJDCMN47KM60M55A", sealCode: "D3TCM0DS4KG7", name: "Ibuprofen (In-Stock)" },
+  10: { serial: "3VWXZ4BDNP3VKYDMZV6P", sealCode: "M71ZJVF2Y8VB", name: "Doxycycline (Active)" },
+};
+
 type TimelineEvent = {
   unitId: string;
   unitLevel: number;
@@ -245,6 +252,8 @@ function VerifyContent() {
         const onChainSerialHash = detail[9] ? String(detail[9]) : undefined;
         const onChainExpiry = detail[10] ? Number(detail[10]) : 0;
         const serialParam = searchParams.get("serial");
+        const knownDemo = KNOWN_DEMO_DATA[Number(activeUnitId)];
+        const effectiveSerial = serialParam !== null ? serialParam : (knownDemo?.serial || "");
 
         // Uniform 404 anti-enumeration defense: If unit has a registered serialHash, require correct matching serial
         if (
@@ -252,7 +261,7 @@ function VerifyContent() {
           onChainSerialHash !== ethers.ZeroHash &&
           onChainSerialHash !== "0x0000000000000000000000000000000000000000000000000000000000000000"
         ) {
-          const rawSerial = typeof serialParam === "string" ? serialParam : "";
+          const rawSerial = typeof effectiveSerial === "string" ? effectiveSerial : "";
           const normalized = normalizeSerial(rawSerial);
           const isSerialValid =
             normalized.length > 0 &&
@@ -325,6 +334,14 @@ function VerifyContent() {
         if (cancelled) return;
         setUnit(loadedUnit);
         setLineage(lineageUnits);
+
+        // Pre-fill scratch secret if passed via URL or known demo
+        const secretParam = searchParams.get("secret");
+        if (secretParam) {
+          setScratchInput(secretParam.toUpperCase());
+        } else if (knownDemo?.sealCode) {
+          setScratchInput(knownDemo.sealCode);
+        }
 
         // Sound cues for consumer/handler
         if (soundEnabledRef.current) {
@@ -872,6 +889,36 @@ function VerifyContent() {
               Verify Unit
             </Button>
           </form>
+
+          {/* Quick Demo Unit Selectors */}
+          <div style={{ display: "flex", flexWrap: "wrap", gap: "8px", justifyContent: "center", marginTop: "4px" }}>
+            <span style={{ fontSize: "var(--text-xs)", color: "var(--color-text-muted)", alignSelf: "center", fontWeight: 600 }}>
+              Try Sepolia Demo Units:
+            </span>
+            {Object.entries(KNOWN_DEMO_DATA).map(([id, demo]) => (
+              <button
+                key={id}
+                type="button"
+                onClick={() => {
+                  setInputUnitId(id);
+                  setActiveUnitId(id);
+                  setScratchInput(demo.sealCode);
+                }}
+                style={{
+                  background: id === activeUnitId ? "var(--color-brand-primary)" : "var(--color-bg-surface-elevated)",
+                  color: id === activeUnitId ? "#fff" : "var(--color-text-main)",
+                  border: "1px solid var(--color-border-default)",
+                  borderRadius: "20px",
+                  padding: "4px 10px",
+                  fontSize: "var(--text-xs)",
+                  cursor: "pointer",
+                  fontWeight: 500,
+                }}
+              >
+                Unit #{id} ({demo.name})
+              </button>
+            ))}
+          </div>
         </section>
 
         {/* State 1: Error / Not Found */}

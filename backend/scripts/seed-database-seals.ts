@@ -5,18 +5,18 @@ import dotenv from "dotenv";
 dotenv.config({ path: path.resolve(__dirname, "../.env") });
 dotenv.config({ path: path.resolve(__dirname, "../../frontend/.env.local") });
 
-// Known demo unit secrets for public testnet verification
+// Known demo unit secrets matching backend/deployments/sepolia-units.json
 const DEMO_UNITS = [
   { unitId: 1, serial: "CD360DWJZHAXPCNRDVF7", sealSecret: "P5NS8WJK6RAK" },
   { unitId: 2, serial: "SGGJ9W55VG8HTN8N0NMM", sealSecret: "NBHVG59Y348R" },
   { unitId: 3, serial: "X9Y4ZDHJHV2ZD567PF1A", sealSecret: "63QRMM2XM7EB" },
   { unitId: 4, serial: "0XMRF9BQW7B9VVYKXY8F", sealSecret: "HNVWG278MFMQ" },
   { unitId: 5, serial: "S7NY46QGMKAFTSCK1K0N", sealSecret: "JRWNQJ99JMME" },
-  { unitId: 6, serial: "R7969E2E20YV677N0J5Q", sealSecret: "3YCNHXTV4950" },
-  { unitId: 7, serial: "E5S0X2Y35Z55X1N13N7N", sealSecret: "G2ZJ7NW84NTR" },
-  { unitId: 8, serial: "113V48CVM7K194W2E7P7", sealSecret: "J02796D55VBN" },
-  { unitId: 9, serial: "Y1V0M5HBRY3Y8J6R3W4Z", sealSecret: "957X6D83V42R" },
-  { unitId: 10, serial: "Z984B20J1A9R5D61G03P", sealSecret: "4H692N1P8M5T" },
+  { unitId: 6, serial: "5X2169CMC620WYKJC7ZN", sealSecret: "3YCNHXTV4950" },
+  { unitId: 7, serial: "Y3S8B9648EN1GYA8NPNB", sealSecret: "D5CB3SQGTCM7" },
+  { unitId: 8, serial: "B8N2XJDCMN47KM60M55A", sealSecret: "D3TCM0DS4KG7" },
+  { unitId: 9, serial: "Y3HJ0SH82SMS3JNW2KXG", sealSecret: "XBF837P8DF5V" },
+  { unitId: 10, serial: "3VWXZ4BDNP3VKYDMZV6P", sealSecret: "M71ZJVF2Y8VB" },
 ];
 
 function computeSealVerifier(unitId: number | string, normalizedSecret: string, version = "v1"): string {
