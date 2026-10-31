@@ -1,6 +1,7 @@
 import crypto from "crypto";
 import {
   getSealRecord,
+  getClientSealLock,
   recordFailedSealAttempt,
   markSealVerified,
   resetSealLockDb,
@@ -19,6 +20,13 @@ export interface SealVerificationResult {
   failedAttempts: number;
   lockedUntil?: string | null;
   scheme?: number;
+}
+
+export interface VerifyUnitSealInput {
+  unitId: string | number;
+  secret: string;
+  manufacturerAddress?: string;
+  clientIdentifier?: string;
 }
 
 /**
@@ -48,26 +56,32 @@ export function generateCrockfordSecret(length = 12): string {
 }
 
 /**
- * Computes a secure HMAC-SHA256 verifier with the server pepper
+ * Computes a secure HMAC-SHA256 verifier with the server pepper and key version prefix (v1:)
  */
-export function computeSealVerifier(unitId: string | number, secret: string): string {
+export function computeSealVerifier(
+  unitId: string | number,
+  secret: string,
+  version = "v1"
+): string {
   const normalized = normalizeCrockfordSecret(secret);
-  return crypto
+  const hmac = crypto
     .createHmac("sha256", SEAL_PEPPER)
     .update(`${unitId}:${normalized}`)
     .digest("hex");
+  return version ? `${version}:${hmac}` : hmac;
 }
 
 /**
- * Registers a newly printed tamper-evident seal for a unit
+ * Registers a newly printed tamper-evident seal for a unit with versioned verifier
  */
 export async function registerUnitSeal(
   unitId: string | number,
   secret: string,
-  scheme = 1
+  scheme = 1,
+  version = "v1"
 ): Promise<{ unitId: string; verifier: string }> {
   const unitIdStr = String(unitId);
-  const verifier = computeSealVerifier(unitIdStr, secret);
+  const verifier = computeSealVerifier(unitIdStr, secret, version);
 
   const record: DbSealRecord = {
     unitId: unitIdStr,
@@ -84,13 +98,9 @@ export async function registerUnitSeal(
 /**
  * Evaluates and verifies a scratch-off seal with dual-scheme support:
  * - Scheme 0: Backward-compatible legacy 4-digit PIN for units #1-#9
- * - Scheme 1: Hardened 12-character Crockford Base32 HMAC with 24-hr lockout
+ * - Scheme 1: Hardened 12-character Crockford Base32 HMAC with client-scoped exponential backoff
  */
-export async function verifyUnitSeal(input: {
-  unitId: string | number;
-  secret: string;
-  manufacturerAddress?: string;
-}): Promise<SealVerificationResult> {
+export async function verifyUnitSeal(input: VerifyUnitSealInput): Promise<SealVerificationResult> {
   const unitIdStr = String(input.unitId);
   const numId = Number(input.unitId);
   const rawSecret = input.secret.trim();
@@ -109,8 +119,24 @@ export async function verifyUnitSeal(input: {
     };
   }
 
-  // 2. Check 24-hour cooldown lockout
-  if (seal?.state === "LOCKED_REVIEW" && seal?.lockedUntil) {
+  // 2. Anti-DoS Check: Client-Scoped Lockout & Exponential Backoff
+  const clientLock = await getClientSealLock(unitIdStr, input.clientIdentifier);
+  if (clientLock.locked && clientLock.lockedUntil) {
+    const lockExpiry = new Date(clientLock.lockedUntil).getTime();
+    if (Date.now() < lockExpiry) {
+      return {
+        valid: false,
+        state: "locked",
+        message: `SECURITY LOCKOUT: Excessive invalid verification attempts. Cooldown active until ${new Date(clientLock.lockedUntil).toLocaleString()}.`,
+        failedAttempts: clientLock.failedAttempts,
+        lockedUntil: clientLock.lockedUntil,
+        scheme: seal?.scheme || 1,
+      };
+    }
+  }
+
+  // Check unit-level 24-hour global lockout if no client identifier supplied
+  if (!input.clientIdentifier && seal?.state === "LOCKED_REVIEW" && seal?.lockedUntil) {
     const lockExpiry = new Date(seal.lockedUntil).getTime();
     if (Date.now() < lockExpiry) {
       return {
@@ -122,7 +148,6 @@ export async function verifyUnitSeal(input: {
         scheme: seal.scheme,
       };
     }
-    // Lockout has expired: reset state back to SEALED
     await resetSealLockDb(unitIdStr);
   }
 
@@ -148,13 +173,24 @@ export async function verifyUnitSeal(input: {
     }
   }
 
-  // 4. Scheme 1: Crockford Base32 HMAC check
+  // 4. Scheme 1: Crockford Base32 HMAC check with timingSafeEqual & version parsing
   if (seal?.verifier) {
-    const computedVerifier = computeSealVerifier(unitIdStr, rawSecret);
-    const isValid = crypto.timingSafeEqual(
-      Buffer.from(computedVerifier, "hex"),
-      Buffer.from(seal.verifier, "hex")
-    );
+    let expectedHex = seal.verifier;
+    let version = "v1";
+    if (expectedHex.includes(":")) {
+      const parts = expectedHex.split(":");
+      version = parts[0];
+      expectedHex = parts[1];
+    }
+    const computedFull = computeSealVerifier(unitIdStr, rawSecret, version);
+    const computedHex = computedFull.includes(":") ? computedFull.split(":")[1] : computedFull;
+
+    const isValid =
+      expectedHex.length === computedHex.length &&
+      crypto.timingSafeEqual(
+        Buffer.from(computedHex, "hex"),
+        Buffer.from(expectedHex, "hex")
+      );
 
     if (isValid) {
       await markSealVerified(unitIdStr);
@@ -166,13 +202,13 @@ export async function verifyUnitSeal(input: {
         scheme: 1,
       };
     } else {
-      const lockStatus = await recordFailedSealAttempt(unitIdStr);
+      const lockStatus = await recordFailedSealAttempt(unitIdStr, input.clientIdentifier);
       return {
         valid: false,
         state: lockStatus.locked ? "locked" : "invalid",
         message: lockStatus.locked
-          ? "SECURITY LOCKOUT: 5 failed attempts reached. Seal locked for 24-hour review."
-          : `Invalid scratch-off secret code (${lockStatus.failedAttempts}/5 attempts).`,
+          ? "SECURITY LOCKOUT: Excessive failed attempts reached. Seal cooldown activated."
+          : `Invalid scratch-off secret code (${lockStatus.failedAttempts} attempts).`,
         failedAttempts: lockStatus.failedAttempts,
         lockedUntil: lockStatus.lockedUntil,
         scheme: 1,
@@ -197,13 +233,13 @@ export async function verifyUnitSeal(input: {
     };
   }
 
-  const lockStatus = await recordFailedSealAttempt(unitIdStr);
+  const lockStatus = await recordFailedSealAttempt(unitIdStr, input.clientIdentifier);
   return {
     valid: false,
     state: lockStatus.locked ? "locked" : "invalid",
     message: lockStatus.locked
-      ? "SECURITY LOCKOUT: 5 failed attempts reached. Seal locked for 24 hours."
-      : `Invalid scratch-off secret code (${lockStatus.failedAttempts}/5 attempts).`,
+      ? "SECURITY LOCKOUT: Excessive failed attempts reached. Seal cooldown activated."
+      : `Invalid scratch-off secret code (${lockStatus.failedAttempts} attempts).`,
     failedAttempts: lockStatus.failedAttempts,
     lockedUntil: lockStatus.lockedUntil,
     scheme: 1,
@@ -211,21 +247,26 @@ export async function verifyUnitSeal(input: {
 }
 
 /**
- * Resets a seal's lockout if called by an authorized entity
+ * Resets a seal's lockout if called by an authorized entity (Manufacturer or Admin)
  */
 export async function resetSealLock(
   unitId: string | number,
   callerAddress: string,
-  manufacturerAddress: string
+  manufacturerAddress: string,
+  adminAddress?: string,
+  clientIdentifier?: string
 ): Promise<{ success: boolean; message: string }> {
-  if (callerAddress.toLowerCase() !== manufacturerAddress.toLowerCase()) {
+  const isMfr = callerAddress.toLowerCase() === manufacturerAddress.toLowerCase();
+  const isAdmin = adminAddress && callerAddress.toLowerCase() === adminAddress.toLowerCase();
+
+  if (!isMfr && !isAdmin) {
     return {
       success: false,
-      message: "Only the authorized manufacturer can reset a locked seal.",
+      message: "Only the authorized manufacturer or administrator can reset a locked seal.",
     };
   }
 
-  await resetSealLockDb(String(unitId));
+  await resetSealLockDb(String(unitId), clientIdentifier);
   return {
     success: true,
     message: `Lockout reset for Unit #${unitId}.`,

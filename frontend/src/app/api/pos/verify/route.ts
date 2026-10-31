@@ -149,6 +149,7 @@ export async function POST(req: NextRequest) {
           unitId,
           secret: scratchSecret,
           manufacturerAddress: manufacturer,
+          clientIdentifier: ip,
         });
         sealRecord = await getSealRecord(String(unitId));
       }

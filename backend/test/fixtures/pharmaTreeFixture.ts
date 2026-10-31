@@ -19,8 +19,15 @@ export async function deployPharmaTreeFixture() {
   const [admin, manufacturer, distributor1, distributor2, pharmacy, unauthorized] =
     await ethers.getSigners();
 
+  // Deploy Trusted ERC2771 Forwarder
+  const ForwarderFactory = await ethers.getContractFactory("PharmaTreeForwarder", admin);
+  const forwarder = await ForwarderFactory.deploy("PharmaTreeForwarder");
+  await forwarder.waitForDeployment();
+  const forwarderAddress = await forwarder.getAddress();
+
+  // Deploy PharmaTree with trusted forwarder
   const PharmaTreeFactory = await ethers.getContractFactory("PharmaTree", admin);
-  const pharmaTree = await PharmaTreeFactory.deploy();
+  const pharmaTree = await PharmaTreeFactory.deploy(forwarderAddress);
   await pharmaTree.waitForDeployment();
 
   // Register roles
@@ -31,6 +38,8 @@ export async function deployPharmaTreeFixture() {
 
   return {
     pharmaTree,
+    forwarder,
+    forwarderAddress,
     admin,
     manufacturer,
     distributor1,

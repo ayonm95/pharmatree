@@ -30,6 +30,18 @@ export const PHARMA_TREE_ABI = [
 export const PHARMA_TREE_CONTRACT = process.env.NEXT_PUBLIC_PHARMA_TREE_CONTRACT || "0x7c40b82B39346A56Ba69df52A37eBBDfF541b198";
 export const PHARMA_TREE_CHAIN_ID = BigInt(process.env.NEXT_PUBLIC_CHAIN_ID || "11155111");
 
+export const PHARMA_TREE_FORWARDER_ABI = [
+  "function nonces(address owner) view returns (uint256)",
+  "function verify(tuple(address from, address to, uint256 value, uint256 gas, uint48 deadline, bytes data, bytes signature) request) view returns (bool)",
+  "function execute(tuple(address from, address to, uint256 value, uint256 gas, uint48 deadline, bytes data, bytes signature) request) payable",
+  "function executeBatch(tuple(address from, address to, uint256 value, uint256 gas, uint48 deadline, bytes data, bytes signature)[] requests, address payable refundReceiver) payable",
+] as const;
+
+export const PHARMA_TREE_FORWARDER_CONTRACT =
+  process.env.NEXT_PUBLIC_TRUSTED_FORWARDER ||
+  process.env.TRUSTED_FORWARDER ||
+  "";
+
 export const UNIT_LEVELS = [
   "Container",
   "Shipment",

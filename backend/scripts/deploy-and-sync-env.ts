@@ -26,8 +26,17 @@ async function main() {
   const targetManufacturer = deployer.address;
   console.log(`Deploying PharmaTree with deployer: ${deployer.address}`);
 
+  let forwarderAddress = process.env.TRUSTED_FORWARDER || process.env.NEXT_PUBLIC_TRUSTED_FORWARDER;
+  if (!forwarderAddress || forwarderAddress === ethers.ZeroAddress) {
+    const ForwarderFactory = await ethers.getContractFactory("PharmaTreeForwarder", deployer);
+    const forwarder = await ForwarderFactory.deploy("PharmaTreeForwarder");
+    await forwarder.waitForDeployment();
+    forwarderAddress = await forwarder.getAddress();
+    console.log(`PharmaTreeForwarder deployed to: ${forwarderAddress}`);
+  }
+
   const Factory = await ethers.getContractFactory("PharmaTree", deployer);
-  const contract = await Factory.deploy();
+  const contract = await Factory.deploy(forwarderAddress);
   await contract.waitForDeployment();
   const contractAddress = await contract.getAddress();
   const deploymentTx = contract.deploymentTransaction();

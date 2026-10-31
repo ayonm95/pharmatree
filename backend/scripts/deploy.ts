@@ -26,8 +26,18 @@ async function getDeployer() {
 async function main() {
   const deployer = await getDeployer();
 
+  // If a TRUSTED_FORWARDER environment variable is provided, use it, or deploy fresh forwarder
+  let forwarderAddress = process.env.TRUSTED_FORWARDER || process.env.NEXT_PUBLIC_TRUSTED_FORWARDER;
+  if (!forwarderAddress || forwarderAddress === ethers.ZeroAddress) {
+    const ForwarderFactory = await ethers.getContractFactory("PharmaTreeForwarder", deployer);
+    const forwarder = await ForwarderFactory.deploy("PharmaTreeForwarder");
+    await forwarder.waitForDeployment();
+    forwarderAddress = await forwarder.getAddress();
+    console.log("Deployed PharmaTreeForwarder at:", forwarderAddress);
+  }
+
   const PharmaTree = await ethers.getContractFactory("PharmaTree");
-  const pharmaTree = await PharmaTree.connect(deployer).deploy();
+  const pharmaTree = await PharmaTree.connect(deployer).deploy(forwarderAddress);
   await pharmaTree.waitForDeployment();
 
   const contractAddress = await pharmaTree.getAddress();

@@ -21,12 +21,15 @@ This repository is structured as an enterprise monorepo containing distinct `bac
 
 | Path | Responsibility |
 | --- | --- |
-| `backend/contracts/PharmaTree.sol` | Smart contract logic: RBAC, hierarchy, ownership, transfers, partitioning, rejections, and sales |
+| `backend/contracts/PharmaTree.sol` | Smart contract logic: RBAC, hierarchy, ownership, transfers, partitioning, rejections, sales, and ERC-2771 context |
+| `backend/contracts/PharmaTreeForwarder.sol` | OpenZeppelin ERC2771Forwarder enabling gasless EIP-712 meta-transactions |
 | `backend/scripts/` | Sepolia and local Hardhat deployment, role granting, and verification workflows |
 | `backend/scripts/e2e-sepolia-validation.ts` | Production test suite validating 8 core anti-counterfeit & dispensing invariants against Sepolia |
 | `backend/test/PharmaTree.test.ts` | Chai/Mocha smart contract unit test suite with Hardhat snapshot fixtures (25 tests) |
 | `backend/test/PosInvariants.test.ts` | Operational supply chain invariants, randomized property tests for $\Sigma Q$ conservation, and 5-tier evaluator (15 tests) |
-| `backend/test/Gs1AndSeals.test.ts` | GS1 Digital Link standard, GTIN-14 Luhn Mod 10, DataMatrix, and dual-scheme cryptographic seal tests (13 tests) |
+| `backend/test/Gs1AndSeals.test.ts` | GS1 Digital Link standard, GTIN-14 Luhn Mod 10, DataMatrix, and dual-scheme cryptographic seal tests (16 tests) |
+| `backend/test/Eip712Forwarder.test.ts` | EIP-712 typed meta-transactions, ERC-2771 forwarder verification, and relayer role decoupling (6 tests) |
+| `backend/test/AtomicSellRace.test.ts` | Concurrent checkout race conditions and atomic state reversion (2 tests) |
 | `frontend/src/app/` | Next.js 16 App Router pages (`/`, `/create`, `/admin`, `/transfers`, `/inventory`, `/verify`, `/pos`) |
 | `frontend/src/app/01/[gtin]/10/[lot]/21/[serial]/` | Standard GS1 Digital Link healthcare resolver route |
 | `frontend/src/app/pos/` | High-throughput Vendor POS QR Scanner Terminal with dual camera/HID wedge listeners |
@@ -505,7 +508,7 @@ Always use dedicated testnet wallets with non-real funds.
 ### 12.1 Automated Testing & Linting:
 
 ```bash
-# Automated tests across 4 test suites (53 tests passing)
+# Automated tests across 5 test suites (64 tests passing, 93.59% Solidity statement coverage)
 npm test
 
 # Frontend code quality & types

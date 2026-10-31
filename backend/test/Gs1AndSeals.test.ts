@@ -222,4 +222,90 @@ describe("Plan E: Dual-Scheme Seal Hardening & Cooldown Lockout", function () {
     expect(resRecovered.valid).to.be.true;
     expect(resRecovered.state).to.equal("verified");
   });
+
+  it("Should isolate lockout to attacking client IP while legitimate pharmacy succeeds (Anti-DoS)", async function () {
+    const unitId = "404";
+    const secret = "J8K9MNP23456";
+    const attackerClient = "ip_hash_attacker_192_168_1_50";
+    const pharmacyClient = "ip_hash_pharmacy_10_0_0_1";
+
+    await registerUnitSeal(unitId, secret, 1);
+
+    // Attacker guesses wrong 5 times from their IP
+    for (let i = 0; i < 5; i++) {
+      const res = await verifyUnitSeal({
+        unitId,
+        secret: "BADGUESS" + i,
+        manufacturerAddress: mfrAddress,
+        clientIdentifier: attackerClient,
+      });
+      if (i === 4) {
+        expect(res.valid).to.be.false;
+        expect(res.state).to.equal("locked");
+      }
+    }
+
+    // Attacker's IP is now locked out
+    const attackerAttempt = await verifyUnitSeal({
+      unitId,
+      secret,
+      manufacturerAddress: mfrAddress,
+      clientIdentifier: attackerClient,
+    });
+    expect(attackerAttempt.valid).to.be.false;
+    expect(attackerAttempt.state).to.equal("locked");
+
+    // CRITICAL ANTI-DoS INVARIANT:
+    // Legitimate pharmacy from their client IP scanning the same unit is NOT locked out!
+    const pharmacyAttempt = await verifyUnitSeal({
+      unitId,
+      secret,
+      manufacturerAddress: mfrAddress,
+      clientIdentifier: pharmacyClient,
+    });
+    expect(pharmacyAttempt.valid).to.be.true;
+    expect(pharmacyAttempt.state).to.equal("verified");
+  });
+
+  it("Should apply exponential backoff on repeated client failures", async function () {
+    const unitId = "505";
+    const secret = "TUVW23456789";
+    const client = "ip_hash_client_backoff_test";
+    await registerUnitSeal(unitId, secret, 1);
+
+    // Attempt 1 & 2: invalid, not locked
+    const a1 = await verifyUnitSeal({ unitId, secret: "W1", manufacturerAddress: mfrAddress, clientIdentifier: client });
+    expect(a1.state).to.equal("invalid");
+    const a2 = await verifyUnitSeal({ unitId, secret: "W2", manufacturerAddress: mfrAddress, clientIdentifier: client });
+    expect(a2.state).to.equal("invalid");
+
+    // Attempt 3: triggers 1-minute backoff
+    const a3 = await verifyUnitSeal({ unitId, secret: "W3", manufacturerAddress: mfrAddress, clientIdentifier: client });
+    expect(a3.state).to.equal("locked");
+    expect(a3.lockedUntil).to.be.a("string");
+
+    // Attempt 4: triggers 5-minute backoff
+    const a4 = await verifyUnitSeal({ unitId, secret: "W4", manufacturerAddress: mfrAddress, clientIdentifier: client });
+    expect(a4.state).to.equal("locked");
+
+    // Attempt 5: triggers 1-hour backoff
+    const a5 = await verifyUnitSeal({ unitId, secret: "W5", manufacturerAddress: mfrAddress, clientIdentifier: client });
+    expect(a5.state).to.equal("locked");
+  });
+
+  it("Should support versioned HMAC verifiers (v1:) with constant-time equality", async function () {
+    const unitId = "606";
+    const secret = "HMACVER1TEST";
+    const verifier = computeSealVerifier(unitId, secret, "v1");
+    expect(verifier).to.match(/^v1:[a-f0-9]{64}$/);
+
+    await registerUnitSeal(unitId, secret, 1, "v1");
+    const res = await verifyUnitSeal({
+      unitId,
+      secret,
+      manufacturerAddress: mfrAddress,
+    });
+    expect(res.valid).to.be.true;
+    expect(res.state).to.equal("verified");
+  });
 });

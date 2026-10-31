@@ -212,6 +212,48 @@ export function sanitizeInputString(raw: unknown, maxLength = 256): string {
     .slice(0, maxLength);
 }
 
+// Store daily vendor quotas in memory
+const inMemoryVendorQuotas: Record<string, number> = {};
+
+/**
+ * Checks and increments the daily transaction/gas quota for an authenticated vendor wallet
+ * Default limit: 50 dispensing transactions per 24-hour UTC day
+ */
+export async function checkVendorDailyQuota(
+  vendorAddress: string,
+  limit = 50
+): Promise<{ allowed: boolean; count: number; remaining: number }> {
+  const cleanVendor = vendorAddress.toLowerCase();
+  const dayKey = `vendor-daily:${cleanVendor}:${new Date().toISOString().slice(0, 10)}`;
+
+  if (hasUpstash) {
+    try {
+      const redis = Redis.fromEnv();
+      const count = await redis.incr(dayKey);
+      if (count === 1) {
+        await redis.expire(dayKey, 86400); // 24 hours
+      }
+      return {
+        allowed: count <= limit,
+        count,
+        remaining: Math.max(0, limit - count),
+      };
+    } catch (err) {
+      console.warn("[RateLimit] Upstash quota error, falling back to in-memory:", err);
+    }
+  }
+
+  const existing = inMemoryVendorQuotas[dayKey] || 0;
+  const newCount = existing + 1;
+  inMemoryVendorQuotas[dayKey] = newCount;
+
+  return {
+    allowed: newCount <= limit,
+    count: newCount,
+    remaining: Math.max(0, limit - newCount),
+  };
+}
+
 /**
  * Validates Ethereum addresses
  */

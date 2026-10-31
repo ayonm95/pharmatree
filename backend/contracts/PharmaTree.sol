@@ -2,9 +2,11 @@
 pragma solidity ^0.8.24;
 
 import {AccessControl} from "@openzeppelin/contracts/access/AccessControl.sol";
+import {Context} from "@openzeppelin/contracts/utils/Context.sol";
+import {ERC2771Context} from "@openzeppelin/contracts/metatx/ERC2771Context.sol";
 import {Strings} from "@openzeppelin/contracts/utils/Strings.sol";
 
-contract PharmaTree is AccessControl {
+contract PharmaTree is AccessControl, ERC2771Context {
     bytes32 public constant MANUFACTURER_ROLE = keccak256("MANUFACTURER_ROLE");
     bytes32 public constant HANDLER_ROLE = keccak256("HANDLER_ROLE");
 
@@ -41,20 +43,21 @@ contract PharmaTree is AccessControl {
     event UnitSold(uint256 indexed id, address indexed soldBy);
 
     modifier onlyAdmin() {
-        require(hasRole(DEFAULT_ADMIN_ROLE, msg.sender), "Not admin");
+        require(hasRole(DEFAULT_ADMIN_ROLE, _msgSender()), "Not admin");
         _;
     }
 
     modifier onlyCurrentOwner(uint256 _id) {
-        require(units[_id].currentOwner == msg.sender, "Not the current owner");
+        require(units[_id].currentOwner == _msgSender(), "Not the current owner");
         _;
     }
 
-    constructor() {
-        admin = msg.sender;
-        _grantRole(DEFAULT_ADMIN_ROLE, msg.sender);
-        _grantRole(MANUFACTURER_ROLE, msg.sender);
-        isManufacturer[msg.sender] = true;
+    constructor(address trustedForwarder_) ERC2771Context(trustedForwarder_) {
+        address deployer = _msgSender();
+        admin = deployer;
+        _grantRole(DEFAULT_ADMIN_ROLE, deployer);
+        _grantRole(MANUFACTURER_ROLE, deployer);
+        isManufacturer[deployer] = true;
     }
 
     function addManufacturer(address _mfr) external onlyAdmin {
@@ -84,14 +87,14 @@ contract PharmaTree is AccessControl {
     }
 
     function _createRootUnit(UnitLevel _level, string calldata _metadata, uint256 _quantity) internal returns (uint256) {
-        require(hasRole(MANUFACTURER_ROLE, msg.sender), "Only manufacturers can create root units");
+        require(hasRole(MANUFACTURER_ROLE, _msgSender()), "Only manufacturers can create root units");
         require(_quantity > 0, "Quantity must be greater than zero");
-        return _createUnit(0, 0, _level, msg.sender, msg.sender, _metadata, _quantity);
+        return _createUnit(0, 0, _level, _msgSender(), _msgSender(), _metadata, _quantity);
     }
 
     function createChildUnits(uint256 _parentId, UnitLevel _childLevel, string calldata _metadata, uint256 _count) external {
         require(_parentId > 0 && _parentId <= unitCounter, "Parent unit does not exist");
-        require(units[_parentId].currentOwner == msg.sender, "Must own the parent to pack children");
+        require(units[_parentId].currentOwner == _msgSender(), "Must own the parent to pack children");
         require(units[_parentId].status == Status.Active, "Parent unit cannot be in transit or sold");
         require(_count > 0, "Count must be greater than zero");
         require(_count <= 250, "Batch count exceeds limit");
@@ -101,7 +104,7 @@ contract PharmaTree is AccessControl {
         uint256 rootId = units[_parentId].rootId == 0 ? _parentId : units[_parentId].rootId;
 
         for (uint256 i = 0; i < _count; i++) {
-            uint256 childId = _createUnit(_parentId, rootId, _childLevel, originalMfr, msg.sender, _metadata, 1);
+            uint256 childId = _createUnit(_parentId, rootId, _childLevel, originalMfr, _msgSender(), _metadata, 1);
             children[_parentId].push(childId);
         }
     }
@@ -176,7 +179,7 @@ contract PharmaTree is AccessControl {
                 units[_id].rootId == 0 ? _id : units[_id].rootId,
                 units[_id].level,
                 units[_id].manufacturer,
-                msg.sender,
+                _msgSender(),
                 childMetadata,
                 _quantity
             );
@@ -186,30 +189,30 @@ contract PharmaTree is AccessControl {
         units[transferId].pendingReceiver = _receiver;
         units[transferId].status = Status.PendingTransfer;
 
-        emit TransferInitiated(transferId, msg.sender, _receiver);
+        emit TransferInitiated(transferId, _msgSender(), _receiver);
         return transferId;
     }
 
     function acceptTransfer(uint256 _id) external {
         require(units[_id].status == Status.PendingTransfer, "No transfer pending");
-        require(units[_id].pendingReceiver == msg.sender, "You are not the pending receiver");
+        require(units[_id].pendingReceiver == _msgSender(), "You are not the pending receiver");
 
         address previousOwner = units[_id].currentOwner;
-        units[_id].currentOwner = msg.sender;
+        units[_id].currentOwner = _msgSender();
         units[_id].pendingReceiver = address(0);
         units[_id].status = Status.Active;
 
-        emit TransferCompleted(_id, previousOwner, msg.sender);
+        emit TransferCompleted(_id, previousOwner, _msgSender());
     }
 
     function rejectTransfer(uint256 _id) external {
         require(units[_id].status == Status.PendingTransfer, "No transfer pending");
-        require(units[_id].pendingReceiver == msg.sender, "You are not the pending receiver");
+        require(units[_id].pendingReceiver == _msgSender(), "You are not the pending receiver");
 
         units[_id].pendingReceiver = address(0);
         units[_id].status = Status.Rejected;
 
-        emit TransferRejected(_id, units[_id].currentOwner, msg.sender);
+        emit TransferRejected(_id, units[_id].currentOwner, _msgSender());
     }
 
     function cancelTransfer(uint256 _id) external onlyCurrentOwner(_id) {
@@ -218,7 +221,7 @@ contract PharmaTree is AccessControl {
         units[_id].pendingReceiver = address(0);
         units[_id].status = Status.Active;
 
-        emit TransferCancelled(_id, msg.sender);
+        emit TransferCancelled(_id, _msgSender());
     }
 
     function reclaimRejectedUnit(uint256 _id) external onlyCurrentOwner(_id) {
@@ -226,9 +229,8 @@ contract PharmaTree is AccessControl {
 
         units[_id].status = Status.Active;
 
-        emit UnitReclaimed(_id, msg.sender);
+        emit UnitReclaimed(_id, _msgSender());
     }
-    
 
     function sellQuantity(uint256 _id, uint256 _quantity) public onlyCurrentOwner(_id) returns (uint256) {
         require(units[_id].status == Status.Active, "Unit is not active");
@@ -247,7 +249,7 @@ contract PharmaTree is AccessControl {
                 units[_id].rootId == 0 ? _id : units[_id].rootId,
                 units[_id].level,
                 units[_id].manufacturer,
-                msg.sender,
+                _msgSender(),
                 soldMetadata,
                 _quantity
             );
@@ -257,7 +259,7 @@ contract PharmaTree is AccessControl {
         units[soldUnitId].status = Status.Sold;
         units[soldUnitId].pendingReceiver = address(0);
 
-        emit UnitSold(soldUnitId, msg.sender);
+        emit UnitSold(soldUnitId, _msgSender());
         return soldUnitId;
     }
 
@@ -281,5 +283,35 @@ contract PharmaTree is AccessControl {
         returns (bool)
     {
         return super.supportsInterface(interfaceId);
+    }
+
+    function _msgSender()
+        internal
+        view
+        virtual
+        override(Context, ERC2771Context)
+        returns (address)
+    {
+        return ERC2771Context._msgSender();
+    }
+
+    function _msgData()
+        internal
+        view
+        virtual
+        override(Context, ERC2771Context)
+        returns (bytes calldata)
+    {
+        return ERC2771Context._msgData();
+    }
+
+    function _contextSuffixLength()
+        internal
+        view
+        virtual
+        override(Context, ERC2771Context)
+        returns (uint256)
+    {
+        return ERC2771Context._contextSuffixLength();
     }
 }

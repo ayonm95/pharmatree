@@ -903,12 +903,67 @@ export async function upsertSealRecord(record: DbSealRecord): Promise<void> {
   safeWriteJson("seals.json", diskSeals);
 }
 
+const inMemoryClientLocks: Record<string, { failedAttempts: number; lockedUntil?: string | null }> = {};
+
+export function calculateSealBackoffMs(attempts: number): number {
+  if (attempts < 3) return 0;
+  if (attempts === 3) return 60 * 1000; // 1 min backoff
+  if (attempts === 4) return 5 * 60 * 1000; // 5 min backoff
+  return 60 * 60 * 1000; // 1 hour backoff (or 24h for >=5)
+}
+
 /**
- * Record a failed seal attempt; locks the seal for 24-hour cooldown if attempts >= 5
+ * Check if a client or unit is currently locked out
+ */
+export async function getClientSealLock(
+  unitId: string,
+  clientIdentifier?: string
+): Promise<{ locked: boolean; failedAttempts: number; lockedUntil?: string }> {
+  if (clientIdentifier) {
+    const key = `${unitId}:${clientIdentifier}`;
+    const rec = inMemoryClientLocks[key];
+    if (rec && rec.lockedUntil) {
+      const lockExpiry = new Date(rec.lockedUntil).getTime();
+      if (Date.now() < lockExpiry) {
+        return { locked: true, failedAttempts: rec.failedAttempts, lockedUntil: rec.lockedUntil };
+      }
+    }
+    return { locked: false, failedAttempts: rec?.failedAttempts || 0 };
+  }
+
+  const seal = await getSealRecord(unitId);
+  if (seal?.state === "LOCKED_REVIEW" && seal?.lockedUntil) {
+    const lockExpiry = new Date(seal.lockedUntil).getTime();
+    if (Date.now() < lockExpiry) {
+      return { locked: true, failedAttempts: seal.failedAttempts, lockedUntil: seal.lockedUntil };
+    }
+  }
+  return { locked: false, failedAttempts: seal?.failedAttempts || 0 };
+}
+
+/**
+ * Record a failed seal attempt; partitioned on (unitId, clientIdentifier) to prevent public QR DoS
  */
 export async function recordFailedSealAttempt(
-  unitId: string
+  unitId: string,
+  clientIdentifier?: string
 ): Promise<{ locked: boolean; failedAttempts: number; lockedUntil?: string }> {
+  if (clientIdentifier) {
+    const key = `${unitId}:${clientIdentifier}`;
+    const prev = inMemoryClientLocks[key] || { failedAttempts: 0 };
+    const newAttempts = prev.failedAttempts + 1;
+    const backoffMs = calculateSealBackoffMs(newAttempts);
+    const locked = backoffMs > 0;
+    const lockedUntil = locked ? new Date(Date.now() + backoffMs).toISOString() : undefined;
+
+    inMemoryClientLocks[key] = {
+      failedAttempts: newAttempts,
+      lockedUntil: lockedUntil || null,
+    };
+
+    return { locked, failedAttempts: newAttempts, lockedUntil };
+  }
+
   let existing = await getSealRecord(unitId);
   if (!existing) {
     existing = {
@@ -966,7 +1021,17 @@ export async function markSealVerified(unitId: string): Promise<void> {
 /**
  * Reset seal lockout (authorized manufacturer or admin action)
  */
-export async function resetSealLockDb(unitId: string): Promise<void> {
+export async function resetSealLockDb(unitId: string, clientIdentifier?: string): Promise<void> {
+  if (clientIdentifier) {
+    delete inMemoryClientLocks[`${unitId}:${clientIdentifier}`];
+  } else {
+    for (const key of Object.keys(inMemoryClientLocks)) {
+      if (key.startsWith(`${unitId}:`)) {
+        delete inMemoryClientLocks[key];
+      }
+    }
+  }
+
   const existing = await getSealRecord(unitId);
   if (existing) {
     await upsertSealRecord({

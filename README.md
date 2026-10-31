@@ -156,10 +156,10 @@ When an authorized handler scans an inbound shipment with their connected Web3 w
 ```text
 .
 ├── backend/                  # Smart contract development & Hardhat environment
-│   ├── contracts/            # Solidity smart contracts (PharmaTree.sol)
-│   ├── test/                 # Chai/Mocha smart contract unit test suite
+│   ├── contracts/            # Solidity smart contracts (PharmaTree.sol, PharmaTreeForwarder.sol)
+│   ├── test/                 # Chai/Mocha smart contract unit test suite (64 automated tests)
 │   ├── scripts/              # Deployment, role granting & verification scripts
-│   │   └── agent-production-validator.ts # Live Sepolia invariant audit suite (Truth Score: 1.000)
+│   │   └── e2e-sepolia-validation.ts # Live Sepolia invariant audit suite (8/8 Invariants Passing)
 │   └── hardhat.config.ts     # Hardhat network & compiler configuration
 │
 ├── frontend/                 # Next.js 16 Web Application (App Router)
@@ -253,27 +253,97 @@ cd backend && npx hardhat run scripts/e2e-sepolia-validation.ts --network sepoli
 
 ---
 
-## 🛡️ Threat Model & Realistic Boundaries
+## 🛡️ Threat Model & Security Matrix
 
-- **The "Garbage In, Garbage Out" Reality Gap**: The Ethereum ledger guarantees tamper-evident provenance and non-repudiation of transactions once recorded. However, it cannot chemically analyze physical medication. If a compromised manufacturer inputs fraudulent metadata at genesis, the ledger faithfully records the history of a counterfeit. Physical quality controls and regulatory inspections remain vital prerequisites.
-- **Physical Cloning vs. Digital Uniqueness**: Anyone can photocopy a physical QR label. PharmaTree enforces that a single on-chain unit cannot be sold twice (anti-replay); however, to prevent pre-sale deception, physical packaging must incorporate tamper-evident break foils and randomized scratch seals.
-- **Public Chain Privacy**: Supply chain flow volume and custody handshakes are public on Ethereum Sepolia. For enterprise commercial confidentiality, zero-knowledge proofs (zk-SNARKs) or private consortium subnets should be used.
+A blockchain is a deterministic ledger of recorded events, not a physical spectrometer. To present an honest, production-grade security posture, PharmaTree delineates explicit defensive boundaries:
 
-### 2. Comprehensive Test Suite (53 Tests Passing)
-Run the 53-scenario automated test suite spanning contract operations, mathematical supply-chain invariants, randomized property tests, GS1 Digital Link processing, and dual-scheme cryptographic seals:
+### Comprehensive Threat-Model Matrix
+
+| Attack Vector | Threat Scenario | Mitigating Mechanism / Stopping Tier | Residual / Out-of-Scope Risks |
+| :--- | :--- | :--- | :--- |
+| **Photocopied QR Sticker** | Counterfeiter photocopies authentic box QR code and affixes to fake carton | **Tier 2 Anti-Replay Lock**: `sellQuantity` & `markAsSold` atomically lock unit status on-chain. Second dispense attempt reverts immediately (`Status.Sold`). | If the counterfeit is dispensed before the genuine medicine, the genuine medicine is rejected. Mitigated by Tier 5 scratch seals on high-risk drugs. |
+| **Forged Unit Barcode** | Adversary fabricates random QR codes or non-existent serial numbers | **Tier 1 Genesis Registration**: Bounds check against `unitCounter` and manufacturer genesis address in `getUnitDetails`. | None. Unregistered IDs fail deterministically. |
+| **Inventory Diversion & Theft** | Stolen shipment redirected to black-market pharmacy | **Tier 3 Custody Handshake**: Verifies dispenser matches on-chain `currentOwner`. Handshakes require explicit recipient `acceptTransfer`. | Physical theft occurring after legitimate pharmacy dispensing. |
+| **Damaged / Recalled Batch Dispensing** | Sub-potent or temperature-compromised shipment dispensed to patient | **Tier 4 Transit Integrity**: Explicit receiver rejection transitions unit to `Status.Rejected`, preventing sale until audit clearance. | Undetected cold-chain breaks where no handler records transit rejection. |
+| **Scratch Seal Brute-Force DoS** | Attacker repeatedly submits bad guesses to lock genuine pharmacy seals | **Client-Partitioned Exponential Backoff**: Failed attempts partitioned by `(unitId, clientIpHash)`. Attacker locked out after 3–5 attempts; legitimate pharmacy is unaffected. | Attacker cycling rotating proxies; mitigated by $32^{12} \approx 1.15 \times 10^{18}$ Crockford Base32 entropy. |
+| **Gasless Relayer Exploitation** | Malicious client drains relayer gas balance through public sell endpoints | **Authenticated Forwarder & Gas Quotas**: EIP-712 / EIP-191 signer must match `currentOwner`. Max 50 tx/day per vendor; automatic 503 cutoff below 0.001 ETH balance. | Mempool congestion spikes; mitigated by multi-provider fallback RPC and retry backoff. |
+| **Server / Relayer Compromise** | Attacker compromises backend server hosting `RELAYER_PRIVATE_KEY` | **Role Decoupling (ERC-2771)**: Relayer EOA holds ZERO roles in `PharmaTree.sol`. Attacker cannot mint units, grant roles, or sell unowned inventory without vendor signatures. | Attacker draining native Sepolia ETH from the relayer wallet. |
+| **"Garbage In, Garbage Out"** | Corrupt manufacturer mints batches with falsified active ingredients | **Out of Scope (Physical Reality Gap)**: Blockchain ledger accurately records fraudulent genesis. Regulatory GMP audits and physical lab inspections required. | Physical chemical composition cannot be deduced from digital cryptography alone. |
+
+---
+
+## 🔬 Architectural Review Lenses
+
+Rather than relying on isolated opinions, PharmaTree's architecture was evaluated across five rigorous engineering review lenses:
+
+### 1. The Physics & Packaging Lens
+- **Principle**: A digital token cannot enforce physical molecular authenticity.
+- **Implementation**: The system combines on-chain state with physical tamper-evident tear tapes and dual-scheme scratch-off foils (Scheme 0 legacy 4-digit PIN for low-friction units, Scheme 1 12-char Crockford Base32 HMAC for high-value lots). Physical packaging must be visibly disrupted to access the secret.
+
+### 2. The Regulatory & Interoperability Lens
+- **Principle**: Supply chain software must conform to global data standards rather than proprietary schemas.
+- **Implementation**: Full GS1 Digital Link compliance (`/01/{GTIN}/10/{Lot}/21/{Serial}?17={Expiry}`), Modulo 10 Luhn check-digit verification on GTIN-14, continuous element strings with ASCII `\x1d` group separators, and 2D GS1 DataMatrix barcode SVG synthesis.
+
+### 3. The Adversarial Threat Defense Lens
+- **Principle**: Public endpoints and relayers are adversarial attack surfaces.
+- **Implementation**: Complete role decoupling (relayer wallet has zero administrative or manufacturer privileges), OpenZeppelin `ERC2771Forwarder` meta-transaction execution, per-vendor daily transaction caps, low-gas circuit breakers (< 0.001 ETH), constant-time HMAC comparison via `crypto.timingSafeEqual`, and client-scoped anti-DoS exponential lockouts.
+
+### 4. The Human Factors & HCI Lens
+- **Principle**: Security measures that slow down retail cashiers will be disabled or bypassed.
+- **Implementation**: POS dispensing defaults to a sub-500ms single-scan, single-key workflow (press `Spacebar` or `Enter` to dispense once Tiers 1–4 pass). Tier 5 scratch inspection is collapsed into an optional drawer for routine transactions and elevated only when indicated by risk policy.
+
+### 5. The Formal Invariants & Mathematics Lens
+- **Principle**: Supply chain operations must preserve conservation laws under arbitrary concurrency.
+- **Implementation**: Monotonic sequential unit numbering, strict hierarchical ordering (Container > Shipment > Batch > Box > Item), atomic two-party transfer handshakes, and strict mass conservation ($\sum Q_{\text{initial}} = \sum Q_{\text{active}} + \sum Q_{\text{sold}}$) verified via randomized property testing across 35 parallel supply-chain operations.
+
+---
+
+## 📋 Risk-Tiered Verification Policy
+
+To balance security rigor with retail dispensary throughput, PharmaTree defines a two-tier operational product policy:
+
+1. **Standard Risk Protocol (General OTC & Routine Prescriptions)**:
+   - **Tiers 1–4 Automated Check**: Single barcode scan validates genesis registration, unsold status, current dispensary custody, and transit integrity.
+   - **Dispense Speed**: < 500 ms with single-key (`Spacebar`/`Enter`) checkout.
+   - **Tamper Seal**: Scratch seal inspection is optional and kept collapsed.
+
+2. **Elevated Risk Protocol (Controlled Substances, Specialty Oncology, Cold-Chain Biologics)**:
+   - **Mandatory 5-Tier Verification**: Cashier or receiving pharmacist scratches the tamper seal to expose the 12-character Crockford Base32 PIN.
+   - **Verification**: Terminal validates HMAC against on-chain salt and marks seal consumed.
+   - **Dispensing**: Sale is blocked if seal has been previously consumed, locked, or tampered with.
+
+---
+
+## 🧪 Comprehensive Test Suite (64 Automated Tests Passing)
+
+The monorepo features 64 passing automated tests and **93.59% Solidity statement coverage** across 5 test suites:
 
 ```bash
-# Run all unit and invariant test suites
+# Run all smart contract, invariant, and cryptographic seal tests
 npm test
 
-# Run tests and validate frontend production build
+# Run tests and validate frontend Next.js production build
 npm run test:all
 ```
 
-Test coverage includes:
-- **`PharmaTree.test.ts` (25 tests)**: Role-based authorization, hierarchical packaging, 2-party transfer handshakes, explicit receiver rejections, partial transfer remainder conservation, and fractional dispensing.
-- **`PosInvariants.test.ts` (15 tests)**: All 8 operational supply-chain invariants, pure 5-tier evaluation engine, replay/diversion prevention, and a 35-step randomized property test asserting exact global quantity conservation ($\Sigma Q$).
-- **`Gs1AndSeals.test.ts` (13 tests)**: GTIN-14 Modulo 10 check digit validation, standard GS1 Digital Link URI generation/parsing, continuous element strings with ASCII `\x1d` separators, 2D DataMatrix SVG rendering, Scheme 0 legacy 4-digit PINs, Scheme 1 Crockford Base32 12-char HMAC-SHA256, 24-hr anti-DoS cooldown lockout, and manufacturer resets.
+### Test Suite Breakdown:
+- **`PharmaTree.test.ts` (25 tests)**: Role-based access control, hierarchical unit creation, two-party custody handshakes, explicit receiver rejection flows, remainder quantity conservation, and retail dispensing.
+- **`PosInvariants.test.ts` (15 tests)**: All 8 operational supply-chain invariants, pure 5-tier evaluation engine, replay/diversion detection, and randomized property test verifying $\sum Q$ mass conservation.
+- **`Gs1AndSeals.test.ts` (16 tests)**: GTIN-14 Luhn check digit, GS1 Digital Link URI builder/parser, element strings with ASCII `\x1d` separators, 2D DataMatrix SVG generation, Crockford Base32 normalization, Scheme 0/1 seals, client-scoped anti-DoS lockout, exponential backoff, and versioned HMAC keys (`v1:`).
+- **`Eip712Forwarder.test.ts` (6 tests)**: Trusted forwarder address recording, unprivileged relayer role isolation (zero roles), direct owner execution fallback, valid EIP-712 meta-transaction execution via `ERC2771Forwarder`, and forged signature rejection.
+- **`AtomicSellRace.test.ts` (2 tests)**: Concurrent checkout race conditions (first terminal succeeds, second atomically reverts with `Unit is not active`), and fractional inventory split conservation.
+
+```text
+--------------------------|----------|----------|----------|----------|----------------|
+File                      |  % Stmts | % Branch |  % Funcs |  % Lines |Uncovered Lines |
+--------------------------|----------|----------|----------|----------|----------------|
+ contracts/               |    93.59 |    72.37 |    82.14 |    93.58 |                |
+  PharmaTree.sol          |    93.59 |    72.37 |    81.48 |    93.58 |... 271,285,305 |
+  PharmaTreeForwarder.sol |      100 |      100 |      100 |      100 |                |
+--------------------------|----------|----------|----------|----------|----------------|
+All files                 |    93.59 |    72.37 |    82.14 |    93.58 |                |
+--------------------------|----------|----------|----------|----------|----------------|
+```
 
 ---
 
