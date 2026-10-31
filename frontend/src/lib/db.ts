@@ -60,7 +60,7 @@ function ensureDataDir(): string {
     }
     cachedDataDir = primary;
     return primary;
-  } catch (err) {
+  } catch {
     // If primary failed (e.g. process.cwd() is read-only in production), fallback to /tmp
     try {
       const tmpDir = path.join("/tmp", ".pharmatree-data");
