@@ -171,7 +171,7 @@ export async function initDbSchema(): Promise<void> {
 
       CREATE TABLE IF NOT EXISTS seal_secrets (
         unit_id VARCHAR(64) PRIMARY KEY,
-        contract_address VARCHAR(42) DEFAULT '0xbd245c7f7c8bf4a8ec016e8c370d3e6931bead72',
+        contract_address VARCHAR(42) DEFAULT '0xa51fe74519ffdd2f167e74780be7aad155eef345',
         verifier VARCHAR(128) NOT NULL,
         scheme INTEGER NOT NULL DEFAULT 1,
         state VARCHAR(32) DEFAULT 'SEALED',
@@ -182,7 +182,7 @@ export async function initDbSchema(): Promise<void> {
 
       CREATE TABLE IF NOT EXISTS units (
         unit_id VARCHAR(64) PRIMARY KEY,
-        contract_address VARCHAR(42) DEFAULT '0xbd245c7f7c8bf4a8ec016e8c370d3e6931bead72',
+        contract_address VARCHAR(42) DEFAULT '0xa51fe74519ffdd2f167e74780be7aad155eef345',
         parent_id VARCHAR(64),
         root_id VARCHAR(64),
         level INTEGER,
@@ -201,7 +201,7 @@ export async function initDbSchema(): Promise<void> {
       CREATE TABLE IF NOT EXISTS unit_events (
         id SERIAL PRIMARY KEY,
         unit_id VARCHAR(64) NOT NULL,
-        contract_address VARCHAR(42) DEFAULT '0xbd245c7f7c8bf4a8ec016e8c370d3e6931bead72',
+        contract_address VARCHAR(42) DEFAULT '0xa51fe74519ffdd2f167e74780be7aad155eef345',
         event_name VARCHAR(64) NOT NULL,
         from_address VARCHAR(42),
         to_address VARCHAR(42),
@@ -277,9 +277,9 @@ export async function initDbSchema(): Promise<void> {
       );
 
       -- Ensure multi-contract scoping columns exist on existing deployments
-      ALTER TABLE units ADD COLUMN IF NOT EXISTS contract_address VARCHAR(42) DEFAULT '0xbd245c7f7c8bf4a8ec016e8c370d3e6931bead72';
-      ALTER TABLE unit_events ADD COLUMN IF NOT EXISTS contract_address VARCHAR(42) DEFAULT '0xbd245c7f7c8bf4a8ec016e8c370d3e6931bead72';
-      ALTER TABLE seal_secrets ADD COLUMN IF NOT EXISTS contract_address VARCHAR(42) DEFAULT '0xbd245c7f7c8bf4a8ec016e8c370d3e6931bead72';
+      ALTER TABLE units ADD COLUMN IF NOT EXISTS contract_address VARCHAR(42) DEFAULT '0xa51fe74519ffdd2f167e74780be7aad155eef345';
+      ALTER TABLE unit_events ADD COLUMN IF NOT EXISTS contract_address VARCHAR(42) DEFAULT '0xa51fe74519ffdd2f167e74780be7aad155eef345';
+      ALTER TABLE seal_secrets ADD COLUMN IF NOT EXISTS contract_address VARCHAR(42) DEFAULT '0xa51fe74519ffdd2f167e74780be7aad155eef345';
     `);
     schemaInitialized = true;
   } catch (err) {
@@ -1041,7 +1041,7 @@ export async function getUnitEvents(unitId: string): Promise<DbUnitEvent[]> {
 /**
  * Track last indexed block, optionally scoped by contract address
  */
-export async function getLastIndexedBlock(defaultBlock = 12032098, contractAddress?: string): Promise<number> {
+export async function getLastIndexedBlock(defaultBlock = 12033849, contractAddress?: string): Promise<number> {
   const indexerKey = contractAddress ? `last_indexed_block:${contractAddress.toLowerCase()}` : "last_indexed_block";
   if (neonPool) {
     await initDbSchema();

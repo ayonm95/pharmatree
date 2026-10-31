@@ -47,13 +47,11 @@ export function useWalletActions({
         const autoSerial = `SN-${Date.now().toString(36).toUpperCase()}-${randomEntropy}`;
         const autoExpiry = Math.floor(Date.now() / 1000) + 730 * 86400; // 2 years default shelf life
 
-        let tx;
-        try {
-          tx = await contract.createRootUnitWithSerial(0, metadata, qtyNum, autoSerial, autoExpiry);
-        } catch {
-          // Fallback for legacy ABI compatibility
-          tx = await contract.createRootUnit(0, metadata, qtyNum);
-        }
+        // Calculate serialHash off-chain so plaintext serial is NEVER passed in calldata
+        const normalized = autoSerial.toUpperCase().trim().replace(/[\s-]+/g, "");
+        const serialHash = ethers.keccak256(ethers.toUtf8Bytes(normalized));
+
+        const tx = await contract.createRootUnit(0, metadata, qtyNum, serialHash, autoExpiry);
         await tx.wait();
         notify(`Medicine batch registered: ${name} (${qtyNum} units).`, "success");
         await refreshData(account, contract);
@@ -183,8 +181,12 @@ export function useWalletActions({
       try {
         setLoading(true);
         let tx;
-        if (typeof contract.sellQuantity === "function") {
-          tx = await contract.sellQuantity(Number(unitId), quantity);
+        const details = await readonlyContract.getUnitDetails(Number(unitId));
+        const totalQty = Number(details[7]);
+        if (quantity < totalQty) {
+          const childSerial = "SN" + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 6).toUpperCase();
+          const childSerialHash = ethers.keccak256(ethers.toUtf8Bytes(childSerial));
+          tx = await contract.sellQuantityWithSerialHash(Number(unitId), quantity, childSerialHash);
         } else {
           tx = await contract.markAsSold(Number(unitId));
         }

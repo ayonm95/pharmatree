@@ -14,7 +14,7 @@ async function main() {
   console.log("   (Verifies Live Sepolia Deployment & Pre-Seeded Fixtures #1-#10)    ");
   console.log("======================================================================");
 
-  const contractAddress = process.env.SEPOLIA_CONTRACT_ADDRESS || "0xbD245c7f7C8bF4A8Ec016e8C370D3e6931BeAd72";
+  const contractAddress = process.env.SEPOLIA_CONTRACT_ADDRESS || "0xa51Fe74519fFdd2f167e74780Be7AAD155eEF345";
   const forwarderAddress = process.env.TRUSTED_FORWARDER || "0x2d24b5b481d0981AE7904790e9d8BF4c162b6c8c";
   const relayerAddress = process.env.SEPOLIA_RELAYER_ADDRESS || "0x335684Cfb813f673fed3f2bb87BF2778D4E96A72";
 
@@ -29,13 +29,18 @@ async function main() {
       "function DEFAULT_ADMIN_ROLE() view returns (bytes32)",
       "function MANUFACTURER_ROLE() view returns (bytes32)",
       "function HANDLER_ROLE() view returns (bytes32)",
+      "function DISPENSER_ROLE() view returns (bytes32)",
+      "function QA_ROLE() view returns (bytes32)",
       "function hasRole(bytes32 role, address account) view returns (bool)",
       "function isManufacturer(address) view returns (bool)",
       "function isHandler(address) view returns (bool)",
+      "function isDispenser(address) view returns (bool)",
+      "function isQA(address) view returns (bool)",
       "function unitCounter() view returns (uint256)",
-      "function getUnitDetails(uint256) view returns (tuple(uint256 parentId, uint256 rootId, uint8 level, address manufacturer, address currentOwner, address pendingReceiver, uint8 status, uint256 quantity, string metadata))",
-      "function sellQuantity(uint256 unitId, uint256 quantity) external returns (uint256)",
-      "function markAsSold(uint256 unitId) external"
+      "function getUnitDetails(uint256) view returns (tuple(uint256 parentId, uint256 rootId, uint8 level, address manufacturer, address currentOwner, address pendingReceiver, uint8 status, uint256 quantity, string metadata, bytes32 serialHash, uint256 expiry))",
+      "function sellQuantityWithSerialHash(uint256 unitId, uint256 quantity, bytes32 childSerialHash) external returns (uint256)",
+      "function markAsSold(uint256 unitId) external",
+      "function verifySerial(uint256 unitId, string serial) view returns (bool)"
     ],
     contractAddress,
     signer
@@ -88,8 +93,8 @@ async function main() {
   let revertReason = "";
 
   try {
-    // Signer attempts to call sellQuantity on Unit #8 (owned by 0xe88a5608B536BCc9d557823234BacA9a00F2540B)
-    await contract.sellQuantity.staticCall(8, 1);
+    // Signer attempts to call sellQuantityWithSerialHash on Unit #8 (owned by 0xe88a5608B536BCc9d557823234BacA9a00F2540B)
+    await contract.sellQuantityWithSerialHash.staticCall(8, 1, ethers.ZeroHash);
     nonOwnerRevertPassed = false;
   } catch (err: any) {
     revertReason = err?.message || String(err);
@@ -100,7 +105,7 @@ async function main() {
     testCase: "Direct Non-Owner Sell On-Chain Rejection",
     category: "Smart Contract Invariants",
     status: nonOwnerRevertPassed ? "PASSED" : "FAILED",
-    details: `Calling sellQuantity(8, 1) directly from non-owner (${await signer.getAddress()}) is rejected on-chain. Owner is ${currentOwnerUnit8}.`,
+    details: `Calling sellQuantityWithSerialHash(8, 1, ZeroHash) directly from non-owner (${await signer.getAddress()}) is rejected on-chain. Owner is ${currentOwnerUnit8}.`,
     evidence: { unitId: 8, currentOwner: currentOwnerUnit8, nonOwnerReverted: nonOwnerRevertPassed }
   });
 
@@ -237,7 +242,7 @@ async function main() {
   // Invariant 9: Tier 5 - Scheme 1 Cryptographic Scratch Seal Verification (HMAC + Crockford Base32)
   const scheme1Secret = "W6JK-3Y8M-9P42"; // gitleaks:allow (test fixture secret)
   const { computeSealVerifier } = await import("../../frontend/src/lib/sealVerifier");
-  const verifier = computeSealVerifier(1, scheme1Secret, unit1.manufacturer);
+  const verifier = computeSealVerifier(1, scheme1Secret, "v1");
   const isScheme1Valid = verifier.startsWith("v1:") && verifier.length === 67;
   results.push({
     testCase: "Tier 5: Scheme 1 Crockford Base32 HMAC Tamper Seal Verification",

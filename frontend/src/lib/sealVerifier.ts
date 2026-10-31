@@ -10,7 +10,7 @@ import {
   DbSealRecord,
 } from "./db";
 
-export { calculateSealBackoffMs };
+export { calculateSealBackoffMs, upsertSealRecord };
 
 const CROCKFORD_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const SEAL_PEPPER = process.env.SEAL_PEPPER || "pharmatree-tamper-seal-pepper-sepolia-v1";
@@ -46,6 +46,21 @@ export function normalizeCrockfordSecret(raw: string): string {
 }
 
 export const normalizeCrockfordBase32 = normalizeCrockfordSecret;
+
+import { normalizeSerial } from "./serial";
+export { normalizeSerial };
+
+/**
+ * Generates a high-entropy 20-character Crockford Base32 serial number (100 bits entropy)
+ */
+export function generateSecureSerial(length = 20): string {
+  const bytes = crypto.randomBytes(length);
+  let result = "";
+  for (let i = 0; i < length; i++) {
+    result += CROCKFORD_ALPHABET[bytes[i] % 32];
+  }
+  return result;
+}
 
 /**
  * Generates a high-entropy 12-character Crockford Base32 secret
@@ -179,11 +194,12 @@ export async function verifyUnitSeal(input: VerifyUnitSealInput): Promise<SealVe
     await resetSealLockDb(unitIdStr);
   }
 
-  // 3. Scheme 0: Legacy 4-digit PIN fallback for units #1-#9
+  // 3. Scheme 0: Legacy 4-digit PIN fallback (REJECTED by default unless ALLOW_LEGACY_SEALS=true)
+  const allowLegacy = process.env.ALLOW_LEGACY_SEALS === "true";
   const isLegacyUnit = numId > 0 && numId <= 9;
   const legacyPin = input.manufacturerAddress ? input.manufacturerAddress.slice(-4).toLowerCase() : "";
 
-  if (isLegacyUnit || seal?.scheme === 0) {
+  if (allowLegacy && (isLegacyUnit || seal?.scheme === 0)) {
     const cleanLower = rawSecret.toLowerCase();
     if (
       cleanLower === legacyPin ||
@@ -248,8 +264,7 @@ export async function verifyUnitSeal(input: VerifyUnitSealInput): Promise<SealVe
   const normalized = normalizeCrockfordSecret(rawSecret);
   if (
     normalized.length >= 10 ||
-    rawSecret.toLowerCase() === legacyPin ||
-    rawSecret.toLowerCase() === "pass"
+    (allowLegacy && (rawSecret.toLowerCase() === legacyPin || rawSecret.toLowerCase() === "pass"))
   ) {
     await markSealVerified(unitIdStr);
     return {
@@ -257,7 +272,7 @@ export async function verifyUnitSeal(input: VerifyUnitSealInput): Promise<SealVe
       state: "verified",
       message: "Tamper seal code verified authentic.",
       failedAttempts: 0,
-      scheme: isLegacyUnit ? 0 : 1,
+      scheme: isLegacyUnit && allowLegacy ? 0 : 1,
     };
   }
 

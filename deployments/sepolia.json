@@ -3,30 +3,17 @@
   "chainId": 11155111,
   "contracts": {
     "PharmaTree": {
-      "address": "0xbD245c7f7C8bF4A8Ec016e8C370D3e6931BeAd72",
-      "deploymentBlock": 11683269,
-      "roles": {
-        "DEFAULT_ADMIN_ROLE": "0x0000000000000000000000000000000000000000000000000000000000000000",
-        "MANUFACTURER_ROLE": "0x43b85bb817e0cf55811c75b5b430635c98696adcfda2fd2792694b2eb6068222",
-        "HANDLER_ROLE": "0x01daee979b908709a34bc6ad654be94921ea5c1a4b5133fd5d30bc612f00ac00",
-        "DISPENSER_ROLE": "0x530c3374495c52b1b3ee602ae03d1fb5591eb1a473f3cff46b7a0f443cc2496a",
-        "QA_ROLE": "0x77d1300908ea0e5993b827e857e4e1a729e2fdb18090b8f418d1a1b15c9ff88b"
-      }
+      "address": "0xa51Fe74519fFdd2f167e74780Be7AAD155eEF345",
+      "deploymentBlock": 12033849,
+      "deploymentTx": "0xc929895b8f4ed56ee36b8651348c1258537681e73e32589ff15ce1cdeba7701b"
     },
     "PharmaTreeForwarder": {
-      "address": "0x2d24b5b481d0981AE7904790e9d8BF4c162b6c8c",
-      "description": "ERC-2771 / EIP-712 Minimal Forwarder for gasless meta-transactions"
+      "address": "0x2d24b5b481d0981AE7904790e9d8BF4c162b6c8c"
     }
   },
-  "rpcUrl": "https://ethereum-sepolia-rpc.publicnode.com",
-  "explorer": "https://sepolia.etherscan.io",
-  "compiler": {
-    "version": "0.8.24",
-    "optimizer": {
-      "enabled": true,
-      "runs": 200
-    },
-    "viaIR": true
-  },
-  "deployedAt": "2026-10-31T12:00:00Z"
+  "deployer": "0x65371f0ddFa0AD6e7655243cD2A2567328EA1537",
+  "manufacturer": "0x65371f0ddFa0AD6e7655243cD2A2567328EA1537",
+  "pharmacy": "0xe88a5608B536BCc9d557823234BacA9a00F2540B",
+  "seededUnitsCount": 10,
+  "deployedAt": "2026-10-31T12:34:38.639Z"
 }

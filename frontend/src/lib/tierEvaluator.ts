@@ -125,10 +125,12 @@ export function evaluateTiers(input: EvaluateTiersInput): EvaluateTiersResult {
     unit.serialHash !== ethers.ZeroHash &&
     unit.serialHash !== "0x0000000000000000000000000000000000000000000000000000000000000000"
   ) {
+    const raw = typeof serial === "string" ? serial.trim() : "";
+    const normalized = raw.toUpperCase().replace(/[\s-]+/g, "");
     const isSerialValid =
-      typeof serial === "string" &&
-      serial.length > 0 &&
-      ethers.keccak256(ethers.toUtf8Bytes(serial)) === unit.serialHash;
+      raw.length > 0 &&
+      (ethers.keccak256(ethers.toUtf8Bytes(normalized)) === unit.serialHash ||
+       ethers.keccak256(ethers.toUtf8Bytes(raw)) === unit.serialHash);
 
     if (!isSerialValid) {
       return {
@@ -151,6 +153,25 @@ export function evaluateTiers(input: EvaluateTiersInput): EvaluateTiersResult {
 
   // 2. Tier 2: Double-Dispensing & Replay Check (Status Sold == 2)
   if (unit.status === 2) {
+    const isDispensedChild = unit.parentId && String(unit.parentId) !== "0";
+    if (isDispensedChild) {
+      return {
+        authentic: true,
+        tierFailed: null,
+        reason: "DISPENSED_PRESCRIPTION",
+        message: "Authentic Dispensed Prescription Medication. This individual unit was dispensed to a verified patient under an authorized prescription.",
+        tiers: {
+          tier1_registered: true,
+          tier2_unsold: true,
+          tier3_custodyMatch: true,
+          tier4_integrity: true,
+          tier5_tamperValid: false,
+        },
+        diversionDetected: false,
+        tamperSealStatus: "unverified",
+      };
+    }
+
     return {
       authentic: false,
       tierFailed: 2,

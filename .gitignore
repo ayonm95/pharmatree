@@ -60,3 +60,5 @@ frontend/.data/
 .turbo/
 .playwright-mcp/
 report/
+backend/deployments/*-units.json
+deployments/*-units.json

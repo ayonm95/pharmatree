@@ -6,6 +6,7 @@ import {
   PHARMA_TREE_FORWARDER_ABI,
   PHARMA_TREE_FORWARDER_CONTRACT,
 } from "@/lib/pharmaTree";
+import { normalizeSerial, generateSecureSerial } from "@/lib/sealVerifier";
 import { getReadonlyProvider } from "@/lib/rpc";
 import {
   checkRateLimit,
@@ -448,6 +449,7 @@ export async function POST(req: NextRequest) {
         blockNumber: receipt?.blockNumber,
         unitId,
         soldUnitId,
+        childSerial: body.childSerial ? normalizeSerial(body.childSerial) : undefined,
         dispensedQuantity: dispenseQty,
         remainingQuantity: unitQuantity - dispenseQty,
         isFractional: dispenseQty < unitQuantity,
@@ -492,12 +494,17 @@ export async function POST(req: NextRequest) {
     // 7. Execute on-chain dispense via relayer wallet (only for self-owned units)
     const writeContract = new ethers.Contract(PHARMA_TREE_CONTRACT, PHARMA_TREE_ABI, relayerWallet);
 
+    const childSerial = body.childSerial
+      ? normalizeSerial(body.childSerial)
+      : generateSecureSerial(20);
+    const childSerialHash = ethers.keccak256(ethers.toUtf8Bytes(normalizeSerial(childSerial)));
+
     // staticCall simulation pre-check
     try {
       if (dispenseQty === unitQuantity) {
         await writeContract.markAsSold.staticCall(unitId);
       } else {
-        await writeContract.sellQuantity.staticCall(unitId, dispenseQty);
+        await writeContract.sellQuantityWithSerialHash.staticCall(unitId, dispenseQty, childSerialHash);
       }
     } catch (simErr: any) {
       const revertReason =
@@ -521,7 +528,7 @@ export async function POST(req: NextRequest) {
         if (dispenseQty === unitQuantity) {
           return writeContract.markAsSold(unitId, { nonce });
         } else {
-          return writeContract.sellQuantity(unitId, dispenseQty, { nonce });
+          return writeContract.sellQuantityWithSerialHash(unitId, dispenseQty, childSerialHash, { nonce });
         }
       })
     );
@@ -535,6 +542,7 @@ export async function POST(req: NextRequest) {
       blockNumber: receipt?.blockNumber,
       unitId,
       soldUnitId,
+      childSerial: dispenseQty < unitQuantity ? childSerial : undefined,
       dispensedQuantity: dispenseQty,
       remainingQuantity: unitQuantity - dispenseQty,
       isFractional: dispenseQty < unitQuantity,

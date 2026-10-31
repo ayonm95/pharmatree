@@ -33,10 +33,14 @@ describe("EIP-712 Meta-Transactions & ERC-2771 Forwarder (Phase 5 & Relayer Deco
     expect(await pharmaTree.hasRole(await pharmaTree.QA_ROLE(), relayer.address)).to.be.false;
 
     // 4. Create an item and transfer it to the pharmacy
+    const defaultExpiry = Math.floor(Date.now() / 1000) + 730 * 86400;
+    const itemHash = ethers.keccak256(ethers.toUtf8Bytes("FORWARDER-TEST-ITEM-1"));
     await pharmaTree.connect(manufacturer).createRootUnit(
       UnitLevel.IndividualItem,
       "Paracetamol 500mg, 10 tablets",
-      10
+      10,
+      itemHash,
+      defaultExpiry
     );
     const unitId = 1;
     await pharmaTree.connect(manufacturer).initiateTransfer(unitId, pharmacy.address);
@@ -64,9 +68,9 @@ describe("EIP-712 Meta-Transactions & ERC-2771 Forwarder (Phase 5 & Relayer Deco
 
   it("Should reject direct sale attempt from an unprivileged relayer without signed authorization", async function () {
     const { pharmaTree, relayer, unitId } = await loadFixture(deployWithForwarderFixture);
-    // Relayer tries to call sellQuantity directly
+    // Relayer tries to call markAsSold directly
     await expect(
-      pharmaTree.connect(relayer).sellQuantity(unitId, 1)
+      pharmaTree.connect(relayer).markAsSold(unitId)
     ).to.be.revertedWith("Not the current owner");
   });
 
@@ -80,7 +84,8 @@ describe("EIP-712 Meta-Transactions & ERC-2771 Forwarder (Phase 5 & Relayer Deco
   it("Should allow direct calls from legitimate owner when not using forwarder", async function () {
     const { pharmaTree, pharmacy, unitId } = await loadFixture(deployWithForwarderFixture);
     // Direct call from owner still works (fallback to msg.sender)
-    await expect(pharmaTree.connect(pharmacy).sellQuantity(unitId, 2)).to.emit(
+    const childHash = ethers.keccak256(ethers.toUtf8Bytes("CHILD-HASH-DIRECT-SELL"));
+    await expect(pharmaTree.connect(pharmacy).sellQuantityWithSerialHash(unitId, 2, childHash)).to.emit(
       pharmaTree,
       "UnitSold"
     );

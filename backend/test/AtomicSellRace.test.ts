@@ -20,11 +20,16 @@ describe("Atomic Verification & Concurrent Sell Race Conditions (Phase 4)", func
     const [admin, manufacturer, distributor1, , pharmacySigner, roguePharmacy] =
       await ethers.getSigners();
 
+    const testExpiry = Math.floor(Date.now() / 1000) + 730 * 86400;
+    const testHash = ethers.keccak256(ethers.toUtf8Bytes("RACE-RETAIL-UNIT-6"));
+
     // 1. Pharmacy creates a retail unit via manufacturer transfer
     await pharmaTree.connect(manufacturer).createRootUnit(
       4, // IndividualItem
       "Ciprofloxacin 500mg, 1 pack",
-      1
+      1,
+      testHash,
+      testExpiry
     );
     const retailUnitId = 6;
     await pharmaTree.connect(manufacturer).initiateTransfer(retailUnitId, pharmacySigner.address);
@@ -43,10 +48,10 @@ describe("Atomic Verification & Concurrent Sell Race Conditions (Phase 4)", func
       const baseNonce = await ethers.provider.getTransactionCount(pharmacySigner.address);
 
       // Terminal A & Terminal B submit concurrent sell transactions to the mempool
-      const txA = await pharmaTree.connect(pharmacySigner).sellQuantity(retailUnitId, 1, {
+      const txA = await pharmaTree.connect(pharmacySigner).markAsSold(retailUnitId, {
         nonce: baseNonce,
       });
-      const txB = await pharmaTree.connect(pharmacySigner).sellQuantity(retailUnitId, 1, {
+      const txB = await pharmaTree.connect(pharmacySigner).markAsSold(retailUnitId, {
         nonce: baseNonce + 1,
       });
 
@@ -77,7 +82,7 @@ describe("Atomic Verification & Concurrent Sell Race Conditions (Phase 4)", func
 
     // Rogue pharmacy (non-owner) attempting to sell reverts with "Not the current owner"
     await expect(
-      pharmaTree.connect(roguePharmacy).sellQuantity(retailUnitId, 1)
+      pharmaTree.connect(roguePharmacy).markAsSold(retailUnitId)
     ).to.be.revertedWith("Not the current owner");
   });
 
@@ -86,18 +91,24 @@ describe("Atomic Verification & Concurrent Sell Race Conditions (Phase 4)", func
     const { pharmaTree } = fixture;
     const [, manufacturer, , , pharmacySigner] = await ethers.getSigners();
 
+    const testExpiry = Math.floor(Date.now() / 1000) + 730 * 86400;
+    const testHashBox = ethers.keccak256(ethers.toUtf8Bytes("BOX-SERIAL-AZITH-6"));
+
     // Root batch of 10 units
     await pharmaTree.connect(manufacturer).createRootUnit(
       3, // Box
       "Azithromycin 250mg, 10 blisters",
-      10
+      10,
+      testHashBox,
+      testExpiry
     );
     const boxId = 6;
     await pharmaTree.connect(manufacturer).initiateTransfer(boxId, pharmacySigner.address);
     await pharmaTree.connect(pharmacySigner).acceptTransfer(boxId);
 
     // Partial sale 1: sell 4 of 10 -> parent has 6 remaining, child has 4 sold
-    const tx1 = await pharmaTree.connect(pharmacySigner).sellQuantity(boxId, 4);
+    const childHash1 = ethers.keccak256(ethers.toUtf8Bytes("CHILD-SERIAL-PARTIAL-1"));
+    const tx1 = await pharmaTree.connect(pharmacySigner).sellQuantityWithSerialHash(boxId, 4, childHash1);
     await tx1.wait();
 
     const parentAfter1 = await pharmaTree.getUnitDetails(boxId);
@@ -105,7 +116,7 @@ describe("Atomic Verification & Concurrent Sell Race Conditions (Phase 4)", func
     expect(parentAfter1.status).to.equal(Status.Active);
 
     // Partial sale 2: sell 6 of 6 -> parent is fully Sold
-    const tx2 = await pharmaTree.connect(pharmacySigner).sellQuantity(boxId, 6);
+    const tx2 = await pharmaTree.connect(pharmacySigner).sellQuantityWithSerialHash(boxId, 6, ethers.ZeroHash);
     await tx2.wait();
 
     const parentAfter2 = await pharmaTree.getUnitDetails(boxId);
@@ -114,7 +125,7 @@ describe("Atomic Verification & Concurrent Sell Race Conditions (Phase 4)", func
 
     // Partial sale 3: attempting to sell again reverts because status is Sold
     await expect(
-      pharmaTree.connect(pharmacySigner).sellQuantity(boxId, 1)
+      pharmaTree.connect(pharmacySigner).sellQuantityWithSerialHash(boxId, 1, ethers.ZeroHash)
     ).to.be.revertedWith("Unit is not active");
   });
 });

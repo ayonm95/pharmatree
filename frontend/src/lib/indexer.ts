@@ -10,7 +10,7 @@ import {
   DbUnitEvent,
 } from "./db";
 
-const DEFAULT_DEPLOYMENT_BLOCK = 12032098;
+const DEFAULT_DEPLOYMENT_BLOCK = 12033849;
 let isIndexing = false;
 
 export interface IndexerSyncResult {

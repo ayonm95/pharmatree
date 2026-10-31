@@ -9,6 +9,7 @@ import {
   PHARMA_TREE_CONTRACT,
   unitLevelToName,
 } from "../../lib/pharmaTree";
+import { normalizeSerial } from "../../lib/serial";
 import { readonlyProvider } from "../../lib/rpc";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -251,10 +252,11 @@ function VerifyContent() {
           onChainSerialHash !== ethers.ZeroHash &&
           onChainSerialHash !== "0x0000000000000000000000000000000000000000000000000000000000000000"
         ) {
+          const rawSerial = typeof serialParam === "string" ? serialParam : "";
+          const normalized = normalizeSerial(rawSerial);
           const isSerialValid =
-            typeof serialParam === "string" &&
-            serialParam.length > 0 &&
-            ethers.keccak256(ethers.toUtf8Bytes(serialParam)) === onChainSerialHash;
+            normalized.length > 0 &&
+            ethers.keccak256(ethers.toUtf8Bytes(normalized)) === onChainSerialHash;
 
           if (!isSerialValid) {
             setError(`Unit #${activeUnitId} was not found on the blockchain.`);
@@ -633,7 +635,15 @@ function VerifyContent() {
       icon: AlertTriangle,
     };
   } else if (isSold) {
-    if (sealStatus === "verified" || sealStatus === "consumed") {
+    const isDispensedChild = unit && unit.parentId !== "0";
+    if (isDispensedChild) {
+      verdict = {
+        title: "Authentic Dispensed Prescription Medication",
+        description: `Cryptographically verified on Ethereum Sepolia. This individual unit was dispensed to a verified patient under an authorized prescription by pharmacy ${unit ? formatAddress(unit.currentOwner) : ""}.`,
+        variant: "success",
+        icon: CheckCircle2,
+      };
+    } else if (sealStatus === "verified" || sealStatus === "consumed") {
       verdict = {
         title: "✅ Seal Verified Genuine: Single-Use Dispensed Unit",
         description: `Cryptographically verified on Ethereum Sepolia. Tamper seal secret matched manufacturer HMAC. Legally dispensed to patient by authorized pharmacy ${unit ? formatAddress(unit.currentOwner) : ""}.`,

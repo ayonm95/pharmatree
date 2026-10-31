@@ -16,20 +16,19 @@ export const PHARMA_TREE_ABI = [
   "function recallRoot(uint256 _rootId)",
   "function unrecallRoot(uint256 _rootId)",
   "function recalledRoots(uint256) view returns (bool)",
-  "function createRootUnit(uint8 _level, string _metadata, uint256 _quantity) returns (uint256)",
-  "function createRootUnitWithSerial(uint8 _level, string _metadata, uint256 _quantity, string _serial, uint256 _expiry) returns (uint256)",
-  "function createChildUnits(uint256 _parentId, uint8 _childLevel, string _metadata, uint256 _count)",
-  "function createChildUnitsWithSerial(uint256 _parentId, uint8 _childLevel, string _metadata, uint256 _count, string _serial)",
+  "function createRootUnit(uint8 _level, string _metadata, uint256 _quantity, bytes32 _serialHash, uint256 _expiry) returns (uint256)",
+  "function createChildUnitsBatch(uint256 _parentId, uint8 _childLevel, string _metadata, bytes32[] _serialHashes)",
   "function initiateTransfer(uint256 _id, address _receiver) returns (uint256)",
   "function initiatePartialTransfer(uint256 _id, address _receiver, uint256 _quantity) returns (uint256)",
   "function acceptTransfer(uint256 _id)",
   "function rejectTransfer(uint256 _id)",
   "function cancelTransfer(uint256 _id)",
   "function clearRejected(uint256 _id, bytes32 _evidenceHash)",
+  "function reassignCustody(uint256 _unitId, address _newCustodian, bytes32 _reasonHash)",
   "function markAsSold(uint256 _id)",
-  "function sellQuantity(uint256 _id, uint256 _quantity) returns (uint256)",
-  "function sellQuantityWithSerial(uint256 _id, uint256 _quantity, string _childSerial) returns (uint256)",
+  "function sellQuantityWithSerialHash(uint256 _id, uint256 _quantity, bytes32 _childSerialHash) returns (uint256)",
   "function verifySerial(uint256 _id, string _serial) view returns (bool)",
+  "function usedSerialHash(bytes32) view returns (bool)",
   "function getChildren(uint256 _parentId) view returns (uint256[])",
   "function getUnitDetails(uint256 _id) view returns (tuple(uint256 parentId, uint256 rootId, uint8 level, address manufacturer, address currentOwner, address pendingReceiver, uint8 status, uint256 quantity, string metadata, bytes32 serialHash, uint256 expiry))",
 
@@ -39,12 +38,13 @@ export const PHARMA_TREE_ABI = [
   "event TransferRejected(uint256 indexed id, address indexed from, address indexed rejectedBy)",
   "event TransferCancelled(uint256 indexed id, address indexed cancelledBy)",
   "event RejectedCleared(uint256 indexed id, address indexed clearedBy, bytes32 evidenceHash)",
+  "event CustodyReassignmentInitiated(uint256 indexed unitId, address indexed previousOwner, address indexed newCustodian, bytes32 reasonHash)",
   "event UnitSold(uint256 indexed id, address indexed soldBy)",
   "event RootRecalled(uint256 indexed rootId, address indexed recalledBy)",
   "event RootUnrecalled(uint256 indexed rootId, address indexed unrecalledBy)"
 ] as const;
 export const PHARMA_TREE_CONTRACT =
-  process.env.NEXT_PUBLIC_PHARMA_TREE_CONTRACT || "0xbD245c7f7C8bF4A8Ec016e8C370D3e6931BeAd72";
+  process.env.NEXT_PUBLIC_PHARMA_TREE_CONTRACT || "0xa51Fe74519fFdd2f167e74780Be7AAD155eEF345";
 export const PHARMA_TREE_CHAIN_ID = BigInt(process.env.NEXT_PUBLIC_CHAIN_ID || "11155111");
 
 export const PHARMA_TREE_FORWARDER_ABI = [

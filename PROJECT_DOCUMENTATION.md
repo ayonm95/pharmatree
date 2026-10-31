@@ -78,7 +78,7 @@ The repository is organized as a clean enterprise monorepo:
 | `frontend/src/lib/tenantAuth.ts` | Constant-time SHA-256 API key verification, vendor whitelisting, and per-IP sandbox partitioning |
 | `frontend/src/lib/gs1.ts` | GS1 Digital Link builder/parser, GTIN-14 Luhn check digit, and 2D DataMatrix generator |
 | `frontend/src/lib/sealVerifier.ts` | Dual-scheme tamper seal engine with client-scoped exponential backoff and versioned HMAC verifiers |
-| `frontend/src/lib/indexer.ts` | Event indexer starting from contract deployment block `12032098` |
+| `frontend/src/lib/indexer.ts` | Event indexer starting from contract deployment block `12033849` |
 | `frontend/src/lib/tierEvaluator.ts` | Pure 5-Tier Anti-Counterfeiting evaluation engine decoupled from RPC and database |
 | `frontend/src/lib/rpc.ts` | Resilient multi-endpoint FallbackProvider with exponential backoff & rate-limit recovery |
 | `frontend/src/lib/pharmaTree.ts` | Frontend ABI, contract addresses, levels, and status mappings |
@@ -113,7 +113,7 @@ flowchart TD
 
     subgraph Blockchain["Ethereum Sepolia Consensus Layer"]
         Forwarder["PharmaTreeForwarder.sol (ERC-2771 / EIP-712)"]
-        Contract["PharmaTree.sol (0xbD24...d72)"]
+        Contract["PharmaTree.sol (0xa51F...345)"]
         RBAC["Access Control Matrix"]
         Ledger["Unit Registry & Conservation (ΣQ)"]
     end
@@ -159,7 +159,7 @@ stateDiagram-v2
     PendingTransfer --> Rejected: rejectTransfer (Receiver flags damage/breach)
     PendingTransfer --> Active: cancelTransfer (Sender cancels prior to acceptance)
     Rejected --> Active: clearRejected (QA clears quarantine with evidenceHash)
-    Active --> Sold: markAsSold / sellQuantity (Terminal Dispensing)
+    Active --> Sold: markAsSold / sellQuantityWithSerialHash (Terminal Dispensing)
     Sold --> [*]
 ```
 
@@ -169,7 +169,7 @@ stateDiagram-v2
 3. **`rejectTransfer`**: Only callable by designated `pendingReceiver`. Sets `status = Status.Rejected` and clears `pendingReceiver = address(0)`. Ownership remains with the sender.
 4. **`cancelTransfer`**: Only callable by `currentOwner` while unit is `Status.PendingTransfer`. Clears `pendingReceiver` and returns unit to `Status.Active`.
 5. **`clearRejected`**: Only callable by an authorized QA auditor holding `QA_ROLE`. Verifies quarantine inspection on a `Status.Rejected` unit and requires a non-zero `bytes32 _evidenceHash` before returning the unit from `Rejected` back to `Active`, emitting `RejectedCleared`. Unprivileged senders cannot unilaterally reclaim rejected units.
-6. **`markAsSold` / `sellQuantity`**: Only callable by `currentOwner` holding `DISPENSER_ROLE` on an `Active` unit. Governed by the `dispensable` modifier, which strictly blocks dispensing if the batch root has been recalled (`recalledRoots[rootId]`) or if the unit is expired (`expiry > 0 && block.timestamp > expiry`). Sets `Status.Sold`. Terminal state: sold units cannot be transferred or sold again. If any handler or dispenser has their role revoked, all subsequent transfer and sale attempts revert, freezing inventory immediately on-chain.
+6. **`markAsSold` / `sellQuantityWithSerialHash`**: Only callable by `currentOwner` holding `DISPENSER_ROLE` on an `Active` unit. Governed by the `dispensable` modifier, which strictly blocks dispensing if the batch root has been recalled (`recalledRoots[rootId]`) or if the unit is expired (`expiry > 0 && block.timestamp > expiry`). Sets `Status.Sold`. Terminal state: sold units cannot be transferred or sold again. If any handler or dispenser has their role revoked, all subsequent transfer and sale attempts revert, freezing inventory immediately on-chain.
 
 ### 4.2 Exact Mathematical Mass Conservation Theorem
 
@@ -200,7 +200,7 @@ To eliminate unilateral stock dumping or false delivery claims:
 ## 6. POS Dispensing Lifecycle, Signing & Reconciliation
 
 ### 6.1 Transaction Signing Modes
-State-changing dispense operations (`markAsSold` / `sellQuantity`) require cryptographic authorization from the current unit owner:
+State-changing dispense operations (`markAsSold` / `sellQuantityWithSerialHash`) require cryptographic authorization from the current unit owner:
 
 1. **Gasless Sponsored Mode (EIP-712 Meta-Transactions)**:
    - The cashier's terminal generates an EIP-712 typed data message:
@@ -336,19 +336,19 @@ To operate securely as a multi-tenant SaaS while protecting the relayer from gas
 | `removeHandler(address _handler)` | `external` | `onlyAdmin` | Revokes `HANDLER_ROLE` immediately |
 | `removeDispenser(address _dispenser)` | `external` | `onlyAdmin` | Revokes `DISPENSER_ROLE` immediately |
 | `removeQA(address _qa)` | `external` | `onlyAdmin` | Revokes `QA_ROLE` immediately |
-| `createRootUnit(...)` | `external` | `onlyManufacturer` | Mints new top-level container/batch unit |
-| `createRootUnitWithSerial(...)` | `external` | `onlyManufacturer` | Mints root unit with immutable `serialHash = keccak256(serial)` and expiry |
-| `createChildUnits(...)` | `external` | `onlyCurrentOwner` | Mints packed child units under active parent |
-| `createChildUnitsWithSerial(...)` | `external` | `onlyCurrentOwner` | Mints child units with registered `serialHash` |
-| `initiateTransfer(...)` | `external` | `onlyCurrentOwner` | Transfers unit to authorized handler |
+| `createRootUnit(uint8 _level, uint256 _quantity, bytes32 _serialHash, uint256 _expiry)` | `external` | `onlyManufacturer` | Mints new root unit with off-chain Keccak-256 serial hash and strictly future expiry |
+| `createChildUnitsBatch(uint256 _parentId, uint8 _childLevel, uint256 _count, uint256 _qtyPerChild, bytes32[] calldata _serialHashes)` | `external` | `onlyCurrentOwner` | Mints packed child units (cap $\le 100$) under active parent with unique serial hashes |
+| `initiateTransfer(uint256 _id, address _receiver)` | `external` | `onlyCurrentOwner` | Transfers unit to authorized handler |
+| `initiatePartialTransfer(uint256 _id, address _receiver, uint256 _quantity)` | `external` | `onlyCurrentOwner` | Splits quantity into a new child unit and initiates transfer |
 | `acceptTransfer(uint256 _id)` | `external` | `pendingReceiver` | Accepts incoming transfer into active custody |
 | `rejectTransfer(uint256 _id)` | `external` | `pendingReceiver` | Rejects incoming shipment; sets `Status.Rejected` |
 | `cancelTransfer(uint256 _id)` | `external` | `onlyCurrentOwner` | Cancels pending transfer prior to receiver action |
 | `clearRejected(uint256 _id, bytes32 _evidenceHash)` | `external` | `onlyQA` | Verifiable QA audit clearance restoring unit to active status |
+| `reassignCustody(uint256 _unitId, address _newCustodian, bytes32 _reasonHash)` | `external` | `Admin / QA` | Recovers orphaned unit when current custodian's role is revoked |
 | `recallRoot(uint256 _rootId)` | `external` | `Manufacturer / QA` | Freezes entire batch/root hierarchy from retail sale |
 | `unrecallRoot(uint256 _rootId)` | `external` | `Manufacturer / QA` | Lifts batch recall freeze |
 | `markAsSold(uint256 _id)` | `external` | `onlyOwner onlyDispenser dispensable` | Marks active unit as sold (blocks expired/recalled units) |
-| `sellQuantity(uint256 _id, uint256 _qty)` | `external` | `onlyOwner onlyDispenser dispensable` | Splits stock and marks child unit as sold |
+| `sellQuantityWithSerialHash(uint256 _id, uint256 _qty, bytes32 _childSerialHash)` | `external` | `onlyOwner onlyDispenser dispensable` | Splits stock and marks child unit as sold with unique serial hash |
 | `verifySerial(uint256 _id, string _serial)` | `external view` | None | Validates unguessable serial against stored `serialHash` |
 | `getUnitDetails(uint256 _id)` | `external view` | None | Returns full unit tuple (parent, root, owner, status, quantity, serialHash, expiry) |
 
@@ -365,7 +365,7 @@ To operate securely as a multi-tenant SaaS while protecting the relayer from gas
 | `UnitSold` | `uint256 indexed id`, `address indexed soldBy` | None |
 | `RootRecalled` | `uint256 indexed rootId`, `address indexed recalledBy` | None |
 | `RootUnrecalled` | `uint256 indexed rootId`, `address indexed unrecalledBy` | None |
-| `UnitSold` | `uint256 indexed id`, `address indexed soldBy` | None |
+| `CustodyReassignmentInitiated` | `uint256 indexed unitId`, `address indexed previousOwner`, `address indexed newCustodian` | `bytes32 reasonHash` |
 
 ---
 
@@ -404,9 +404,9 @@ Committed example templates:
 # Consensus & Smart Contracts (Sepolia)
 SEPOLIA_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
 SEPOLIA_CHAIN_ID=11155111
-SEPOLIA_CONTRACT_ADDRESS=0xbD245c7f7C8bF4A8Ec016e8C370D3e6931BeAd72
+SEPOLIA_CONTRACT_ADDRESS=0xa51Fe74519fFdd2f167e74780Be7AAD155eEF345
 TRUSTED_FORWARDER=0x2d24b5b481d0981AE7904790e9d8BF4c162b6c8c
-NEXT_PUBLIC_DEPLOYMENT_BLOCK=12032098
+NEXT_PUBLIC_DEPLOYMENT_BLOCK=12033849
 
 # Gasless Relayer Hot Key (Unprivileged: 0 roles on PharmaTree)
 RELAYER_PRIVATE_KEY=your_unprivileged_relayer_private_key

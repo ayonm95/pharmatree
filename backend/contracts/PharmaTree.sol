@@ -36,6 +36,7 @@ contract PharmaTree is AccessControl, ERC2771Context {
     uint256 public unitCounter;
 
     mapping(uint256 => bool) public recalledRoots;
+    mapping(bytes32 => bool) public usedSerialHash;
 
     mapping(address => bool) public isManufacturer;
     mapping(address => bool) public isHandler;
@@ -51,6 +52,7 @@ contract PharmaTree is AccessControl, ERC2771Context {
     event UnitSold(uint256 indexed id, address indexed soldBy);
     event RootRecalled(uint256 indexed rootId, address indexed recalledBy);
     event RootUnrecalled(uint256 indexed rootId, address indexed unrecalledBy);
+    event CustodyReassignmentInitiated(uint256 indexed unitId, address indexed previousOwner, address indexed newCustodian, bytes32 reasonHash);
 
     modifier onlyAdmin() {
         require(hasRole(DEFAULT_ADMIN_ROLE, _msgSender()), "Not admin");
@@ -82,9 +84,7 @@ contract PharmaTree is AccessControl, ERC2771Context {
         require(units[_id].status == Status.Active, "Unit is not active");
         uint256 rId = units[_id].rootId == 0 ? _id : units[_id].rootId;
         require(!recalledRoots[rId], "Batch is recalled");
-        if (units[_id].expiry > 0) {
-            require(block.timestamp <= units[_id].expiry, "Unit is expired");
-        }
+        require(units[_id].expiry > 0 && block.timestamp <= units[_id].expiry, "Unit is expired");
         _;
     }
 
@@ -147,31 +147,31 @@ contract PharmaTree is AccessControl, ERC2771Context {
     }
 
     function recallRoot(uint256 _rootId) external {
+        require(_rootId > 0 && _rootId <= unitCounter, "Invalid root ID");
+        uint256 rId = units[_rootId].rootId == 0 ? _rootId : units[_rootId].rootId;
+        address rootMfr = units[rId].manufacturer;
         require(
-            hasRole(MANUFACTURER_ROLE, _msgSender()) ||
+            _msgSender() == rootMfr ||
             hasRole(QA_ROLE, _msgSender()) ||
             hasRole(DEFAULT_ADMIN_ROLE, _msgSender()),
-            "Not authorized to recall"
+            "Not authorized to recall this batch"
         );
-        require(_rootId > 0 && _rootId <= unitCounter, "Invalid root ID");
-        recalledRoots[_rootId] = true;
-        emit RootRecalled(_rootId, _msgSender());
+        recalledRoots[rId] = true;
+        emit RootRecalled(rId, _msgSender());
     }
 
     function unrecallRoot(uint256 _rootId) external {
+        require(_rootId > 0 && _rootId <= unitCounter, "Invalid root ID");
+        uint256 rId = units[_rootId].rootId == 0 ? _rootId : units[_rootId].rootId;
+        address rootMfr = units[rId].manufacturer;
         require(
-            hasRole(MANUFACTURER_ROLE, _msgSender()) ||
+            _msgSender() == rootMfr ||
             hasRole(QA_ROLE, _msgSender()) ||
             hasRole(DEFAULT_ADMIN_ROLE, _msgSender()),
-            "Not authorized to unrecall"
+            "Not authorized to unrecall this batch"
         );
-        require(_rootId > 0 && _rootId <= unitCounter, "Invalid root ID");
-        recalledRoots[_rootId] = false;
-        emit RootUnrecalled(_rootId, _msgSender());
-    }
-
-    function createRootUnit(UnitLevel _level, string calldata _metadata, uint256 _quantity) external returns (uint256) {
-        return _createRootUnit(_level, _metadata, _quantity, bytes32(0), 0);
+        recalledRoots[rId] = false;
+        emit RootUnrecalled(rId, _msgSender());
     }
 
     struct CreateUnitParams {
@@ -186,27 +186,21 @@ contract PharmaTree is AccessControl, ERC2771Context {
         uint256 expiry;
     }
 
-    function createRootUnitWithSerial(
-        UnitLevel _level,
-        string calldata _metadata,
-        uint256 _quantity,
-        string calldata _serial,
-        uint256 _expiry
-    ) external returns (uint256) {
-        require(bytes(_serial).length > 0, "Serial number required for new mints");
-        bytes32 sHash = keccak256(bytes(_serial));
-        return _createRootUnit(_level, _metadata, _quantity, sHash, _expiry);
-    }
-
-    function _createRootUnit(
+    function createRootUnit(
         UnitLevel _level,
         string calldata _metadata,
         uint256 _quantity,
         bytes32 _serialHash,
         uint256 _expiry
-    ) internal returns (uint256) {
+    ) external returns (uint256) {
         require(hasRole(MANUFACTURER_ROLE, _msgSender()), "Only manufacturers can create root units");
         require(_quantity > 0, "Quantity must be greater than zero");
+        require(_serialHash != bytes32(0), "Serial hash required");
+        require(!usedSerialHash[_serialHash], "Serial hash already used");
+        require(_expiry > block.timestamp, "Expiry must be in the future");
+
+        usedSerialHash[_serialHash] = true;
+
         return _createUnit(CreateUnitParams({
             parentId: 0,
             rootId: 0,
@@ -220,40 +214,29 @@ contract PharmaTree is AccessControl, ERC2771Context {
         }));
     }
 
-    function createChildUnits(uint256 _parentId, UnitLevel _childLevel, string calldata _metadata, uint256 _count) external {
-        _createChildUnitsBatch(_parentId, _childLevel, _metadata, _count, bytes32(0));
-    }
-
-    function createChildUnitsWithSerial(
+    function createChildUnitsBatch(
         uint256 _parentId,
         UnitLevel _childLevel,
         string calldata _metadata,
-        uint256 _count,
-        string calldata _serial
+        bytes32[] calldata _serialHashes
     ) external {
-        bytes32 sHash = bytes(_serial).length > 0 ? keccak256(bytes(_serial)) : bytes32(0);
-        _createChildUnitsBatch(_parentId, _childLevel, _metadata, _count, sHash);
-    }
-
-    function _createChildUnitsBatch(
-        uint256 _parentId,
-        UnitLevel _childLevel,
-        string calldata _metadata,
-        uint256 _count,
-        bytes32 _serialHash
-    ) internal {
+        uint256 count = _serialHashes.length;
         require(_parentId > 0 && _parentId <= unitCounter, "Parent unit does not exist");
         require(units[_parentId].currentOwner == _msgSender(), "Must own the parent to pack children");
         require(units[_parentId].status == Status.Active, "Parent unit cannot be in transit or sold");
-        require(_count > 0, "Count must be greater than zero");
-        require(_count <= 250, "Batch count exceeds limit");
+        require(count > 0 && count <= 100, "Batch count must be between 1 and 100");
         require(uint8(_childLevel) > uint8(units[_parentId].level), "Child level must be strictly lower in hierarchy");
 
         address originalMfr = units[_parentId].manufacturer;
         uint256 rootId = units[_parentId].rootId == 0 ? _parentId : units[_parentId].rootId;
         uint256 expiry = units[_parentId].expiry;
 
-        for (uint256 i = 0; i < _count; i++) {
+        for (uint256 i = 0; i < count; i++) {
+            bytes32 sHash = _serialHashes[i];
+            require(sHash != bytes32(0), "Serial hash required");
+            require(!usedSerialHash[sHash], "Serial hash already used");
+            usedSerialHash[sHash] = true;
+
             uint256 childId = _createUnit(CreateUnitParams({
                 parentId: _parentId,
                 rootId: rootId,
@@ -262,7 +245,7 @@ contract PharmaTree is AccessControl, ERC2771Context {
                 owner: _msgSender(),
                 metadata: _metadata,
                 quantity: 1,
-                serialHash: _serialHash,
+                serialHash: sHash,
                 expiry: expiry
             }));
             children[_parentId].push(childId);
@@ -320,7 +303,12 @@ contract PharmaTree is AccessControl, ERC2771Context {
         require(hasRole(MANUFACTURER_ROLE, _receiver) || hasRole(HANDLER_ROLE, _receiver), "Receiver is not authorized");
         require(hasRole(MANUFACTURER_ROLE, _msgSender()) || hasRole(HANDLER_ROLE, _msgSender()), "Sender role has been revoked");
         uint256 rId = units[_id].rootId == 0 ? _id : units[_id].rootId;
-        require(!recalledRoots[rId], "Batch is recalled");
+        if (recalledRoots[rId]) {
+            require(
+                _receiver == units[_id].manufacturer || hasRole(QA_ROLE, _receiver),
+                "Recalled units can only be returned to manufacturer or QA"
+            );
+        }
         require(_quantity > 0 && _quantity <= units[_id].quantity, "Invalid transfer quantity");
 
         uint256 transferId = _id;
@@ -386,30 +374,52 @@ contract PharmaTree is AccessControl, ERC2771Context {
 
     function clearRejected(uint256 _id, bytes32 _evidenceHash) external onlyQA {
         require(units[_id].status == Status.Rejected, "Unit is not rejected");
+        require(_evidenceHash != bytes32(0), "Evidence hash required");
 
         units[_id].status = Status.Active;
 
         emit RejectedCleared(_id, _msgSender(), _evidenceHash);
     }
 
+    function reassignCustody(uint256 _unitId, address _newCustodian, bytes32 _reasonHash) external {
+        require(hasRole(DEFAULT_ADMIN_ROLE, _msgSender()) || hasRole(QA_ROLE, _msgSender()), "Only Admin or QA can reassign");
+        require(_unitId > 0 && _unitId <= unitCounter, "Unit does not exist");
+        require(_newCustodian != address(0), "Invalid custodian");
+        require(hasRole(MANUFACTURER_ROLE, _newCustodian) || hasRole(HANDLER_ROLE, _newCustodian), "Custodian not authorized");
+        require(units[_unitId].status != Status.Sold, "Cannot reassign sold unit");
+        require(_reasonHash != bytes32(0), "Reason hash required");
+
+        address prevOwner = units[_unitId].currentOwner;
+        require(
+            !hasRole(MANUFACTURER_ROLE, prevOwner) && !hasRole(HANDLER_ROLE, prevOwner),
+            "Current owner has not been revoked"
+        );
+
+        units[_unitId].pendingReceiver = _newCustodian;
+        units[_unitId].status = Status.PendingTransfer;
+
+        emit CustodyReassignmentInitiated(_unitId, prevOwner, _newCustodian, _reasonHash);
+    }
+
     function _sellQuantity(
         uint256 _id,
         uint256 _quantity,
-        string memory _childSerial
+        bytes32 _childSerialHash
     ) internal returns (uint256) {
         require(_quantity > 0 && _quantity <= units[_id].quantity, "Invalid sale quantity");
 
         uint256 soldUnitId = _id;
         if (_quantity < units[_id].quantity) {
+            require(_childSerialHash != bytes32(0), "Child serial hash required for partial dispensing");
+            require(!usedSerialHash[_childSerialHash], "Child serial hash already used");
+            usedSerialHash[_childSerialHash] = true;
+
             uint256 remainingQuantity = units[_id].quantity - _quantity;
             string memory baseMeta = units[_id].metadata;
             units[_id].quantity = remainingQuantity;
             units[_id].metadata = _formatMetadata(baseMeta, remainingQuantity);
 
             string memory soldMetadata = _formatMetadata(baseMeta, _quantity);
-            bytes32 childSerialHash = bytes(_childSerial).length > 0
-                ? keccak256(bytes(_childSerial))
-                : units[_id].serialHash;
 
             soldUnitId = _createUnit(CreateUnitParams({
                 parentId: _id,
@@ -419,7 +429,7 @@ contract PharmaTree is AccessControl, ERC2771Context {
                 owner: _msgSender(),
                 metadata: soldMetadata,
                 quantity: _quantity,
-                serialHash: childSerialHash,
+                serialHash: _childSerialHash,
                 expiry: units[_id].expiry
             }));
             children[_id].push(soldUnitId);
@@ -432,26 +442,22 @@ contract PharmaTree is AccessControl, ERC2771Context {
         return soldUnitId;
     }
 
-    function sellQuantityWithSerial(
+    function sellQuantityWithSerialHash(
         uint256 _id,
         uint256 _quantity,
-        string calldata _childSerial
+        bytes32 _childSerialHash
     ) external onlyCurrentOwner(_id) onlyDispenser dispensable(_id) returns (uint256) {
-        return _sellQuantity(_id, _quantity, _childSerial);
-    }
-
-    function sellQuantity(uint256 _id, uint256 _quantity) external onlyCurrentOwner(_id) onlyDispenser dispensable(_id) returns (uint256) {
-        return _sellQuantity(_id, _quantity, "");
+        return _sellQuantity(_id, _quantity, _childSerialHash);
     }
 
     function markAsSold(uint256 _id) external onlyCurrentOwner(_id) onlyDispenser dispensable(_id) {
-        _sellQuantity(_id, units[_id].quantity, "");
+        _sellQuantity(_id, units[_id].quantity, bytes32(0));
     }
 
     function verifySerial(uint256 _id, string calldata _serial) external view returns (bool) {
         require(_id > 0 && _id <= unitCounter, "Unit does not exist");
         if (units[_id].serialHash == bytes32(0)) {
-            return true;
+            return false;
         }
         return units[_id].serialHash == keccak256(bytes(_serial));
     }

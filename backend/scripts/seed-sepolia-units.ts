@@ -23,7 +23,7 @@ async function main() {
   console.log(`Using deployer: ${deployer.address}`);
 
   const forwarderAddress = "0x2d24b5b481d0981AE7904790e9d8BF4c162b6c8c";
-  const contractAddress = "0xbD245c7f7C8bF4A8Ec016e8C370D3e6931BeAd72";
+  const contractAddress = process.env.SEPOLIA_CONTRACT_ADDRESS || "0xa51Fe74519fFdd2f167e74780Be7AAD155eEF345";
 
   const contract = await ethers.getContractAt("PharmaTree", contractAddress, deployer);
 
@@ -133,7 +133,7 @@ async function main() {
     if (envPath.endsWith(".env.local")) {
       await replaceEnvValue(envPath, "NEXT_PUBLIC_PHARMA_TREE_CONTRACT", contractAddress);
       await replaceEnvValue(envPath, "NEXT_PUBLIC_TRUSTED_FORWARDER", forwarderAddress);
-      await replaceEnvValue(envPath, "NEXT_PUBLIC_DEPLOYMENT_BLOCK", "12032098");
+      await replaceEnvValue(envPath, "NEXT_PUBLIC_DEPLOYMENT_BLOCK", "12033849");
       await replaceEnvValue(envPath, "NEXT_PUBLIC_CHAIN_ID", "11155111");
     } else {
       await replaceEnvValue(envPath, "SEPOLIA_CONTRACT_ADDRESS", contractAddress);

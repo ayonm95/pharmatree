@@ -23,7 +23,7 @@ async function main() {
   const provider = ethers.provider;
   console.log(`Deployer / Admin Wallet: ${deployer.address}`);
 
-  const contractAddress = "0xbD245c7f7C8bF4A8Ec016e8C370D3e6931BeAd72";
+  const contractAddress = process.env.SEPOLIA_CONTRACT_ADDRESS || "0xa51Fe74519fFdd2f167e74780Be7AAD155eEF345";
   const contract = await ethers.getContractAt("PharmaTree", contractAddress, deployer);
 
   // Generate a brand new dedicated Hot Relayer wallet

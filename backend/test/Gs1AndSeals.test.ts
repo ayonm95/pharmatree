@@ -12,10 +12,13 @@ import {
 import {
   generateCrockfordSecret,
   normalizeCrockfordSecret,
+  normalizeSerial,
+  generateSecureSerial,
   computeSealVerifier,
   registerUnitSeal,
   verifyUnitSeal,
   resetSealLock,
+  upsertSealRecord,
 } from "../../frontend/src/lib/sealVerifier";
 
 describe("Plan D: GS1 Digital Link & Barcode Processing", function () {
@@ -131,18 +134,47 @@ describe("Plan E: Dual-Scheme Seal Hardening & Cooldown Lockout", function () {
     expect(secret).to.match(/^[0-9A-HJKMNP-TV-Z]{12}$/);
   });
 
-  it("Should support Scheme 0 legacy 4-digit PIN for units #1-#9", async function () {
+  it("Should normalize serial numbers and generate 20-character secure serials", function () {
+    expect(normalizeSerial("sn-2026-xyz-1234")).to.equal("SN2026XYZ1234");
+    expect(normalizeSerial("  ABC 123 - DEF  ")).to.equal("ABC123DEF");
+
+    const serial = generateSecureSerial();
+    expect(serial).to.have.lengthOf(20);
+    expect(serial).to.match(/^[0-9A-HJKMNP-TV-Z]{20}$/);
+  });
+
+  it("Should reject Scheme 0 legacy 4-digit PIN unless ALLOW_LEGACY_SEALS=true", async function () {
     const legacyUnitId = 9; // Unit #9 on Sepolia
     // Reset any previous state for test isolation
+    await upsertSealRecord({
+      unitId: String(legacyUnitId),
+      verifier: "",
+      scheme: 0,
+      state: "SEALED",
+      failedAttempts: 0,
+      consumedAt: null,
+    });
     await resetSealLock(legacyUnitId, mfrAddress, mfrAddress);
-    const res = await verifyUnitSeal({
+
+    // Rejected by default
+    delete process.env.ALLOW_LEGACY_SEALS;
+    const resDefault = await verifyUnitSeal({
       unitId: legacyUnitId,
-      secret: "1537", // Matches mfrAddress.slice(-4)
+      secret: "1537",
       manufacturerAddress: mfrAddress,
     });
+    expect(resDefault.valid).to.be.false;
+    expect(resDefault.state).to.equal("invalid");
 
-    expect(res.valid).to.be.true;
-    expect(res.state).to.be.oneOf(["verified", "consumed"]);
+    // Accepted only when explicitly enabled
+    process.env.ALLOW_LEGACY_SEALS = "true";
+    const resAllowed = await verifyUnitSeal({
+      unitId: legacyUnitId,
+      secret: "1537",
+      manufacturerAddress: mfrAddress,
+    });
+    expect(resAllowed.valid).to.be.true;
+    delete process.env.ALLOW_LEGACY_SEALS;
   });
 
   it("Should register and verify Scheme 1 Crockford Base32 HMAC secret", async function () {

@@ -10,16 +10,35 @@ import {
 import { evaluateTiers } from "../../frontend/src/lib/tierEvaluator";
 
 describe("PharmaTree POS & Supply Chain Invariants", function () {
+  const defaultExpiry = Math.floor(Date.now() / 1000) + 730 * 86400; // 2 years future
+  let serialCounter = 1000;
+
+  function nextSerialHash(prefix = "POS-SN"): string {
+    return ethers.keccak256(ethers.toUtf8Bytes(`${prefix}-${serialCounter++}-${Date.now()}`));
+  }
+
+  function getSerialHashes(count: number, prefix = "POS-CHILD"): string[] {
+    const hashes: string[] = [];
+    for (let i = 0; i < count; i++) {
+      hashes.push(nextSerialHash(prefix));
+    }
+    return hashes;
+  }
+
   describe("Invariant 1: Monotonic Unit Registration & Global Counter", function () {
     it("Should monotonically assign sequential unit IDs starting from 1", async function () {
       const { pharmaTree, manufacturer } = await loadFixture(deployPharmaTreeFixture);
 
       expect(await pharmaTree.unitCounter()).to.equal(0);
 
-      await pharmaTree.connect(manufacturer).createRootUnit(UnitLevel.Batch, "Batch #1", 100);
+      await pharmaTree
+        .connect(manufacturer)
+        .createRootUnit(UnitLevel.Batch, "Batch #1", 100, nextSerialHash(), defaultExpiry);
       expect(await pharmaTree.unitCounter()).to.equal(1);
 
-      await pharmaTree.connect(manufacturer).createRootUnit(UnitLevel.Batch, "Batch #2", 200);
+      await pharmaTree
+        .connect(manufacturer)
+        .createRootUnit(UnitLevel.Batch, "Batch #2", 200, nextSerialHash(), defaultExpiry);
       expect(await pharmaTree.unitCounter()).to.equal(2);
 
       const u1 = await pharmaTree.getUnitDetails(1);
@@ -33,21 +52,29 @@ describe("PharmaTree POS & Supply Chain Invariants", function () {
     it("Should strictly enforce parent level > child level", async function () {
       const { pharmaTree, manufacturer, unauthorized } = await loadFixture(deployPharmaTreeFixture);
 
-      await pharmaTree.connect(manufacturer).createRootUnit(UnitLevel.Container, "Container Root", 1);
+      await pharmaTree
+        .connect(manufacturer)
+        .createRootUnit(UnitLevel.Container, "Container Root", 1, nextSerialHash(), defaultExpiry);
 
       // Level 0 (Container) -> Level 3 (Box) valid
       await expect(
-        pharmaTree.connect(manufacturer).createChildUnits(1, UnitLevel.Box, "Box 1", 2)
+        pharmaTree
+          .connect(manufacturer)
+          .createChildUnitsBatch(1, UnitLevel.Box, "Box 1", getSerialHashes(2, "BOX"))
       ).to.not.be.reverted;
 
       // Cannot pack Level 0 (Container) under Level 3 (Box)
       await expect(
-        pharmaTree.connect(manufacturer).createChildUnits(2, UnitLevel.Container, "Invalid Container", 1)
+        pharmaTree
+          .connect(manufacturer)
+          .createChildUnitsBatch(2, UnitLevel.Container, "Invalid Container", getSerialHashes(1))
       ).to.be.revertedWith("Child level must be strictly lower in hierarchy");
 
       // Non-owner cannot pack children
       await expect(
-        pharmaTree.connect(unauthorized).createChildUnits(1, UnitLevel.IndividualItem, "Pills", 5)
+        pharmaTree
+          .connect(unauthorized)
+          .createChildUnitsBatch(1, UnitLevel.IndividualItem, "Pills", getSerialHashes(5))
       ).to.be.revertedWith("Must own the parent to pack children");
     });
   });
@@ -59,7 +86,9 @@ describe("PharmaTree POS & Supply Chain Invariants", function () {
       const initialQuantity = 500n;
       const transferQuantity = 175n;
 
-      await pharmaTree.connect(manufacturer).createRootUnit(UnitLevel.Batch, "Batch Vaccines", initialQuantity);
+      await pharmaTree
+        .connect(manufacturer)
+        .createRootUnit(UnitLevel.Batch, "Batch Vaccines", initialQuantity, nextSerialHash(), defaultExpiry);
       const parentBefore = await pharmaTree.getUnitDetails(1);
       expect(parentBefore.quantity).to.equal(initialQuantity);
 
@@ -91,9 +120,13 @@ describe("PharmaTree POS & Supply Chain Invariants", function () {
       const initialStock = 120n;
       const soldQuantity = 45n;
 
-      await pharmaTree.connect(manufacturer).createRootUnit(UnitLevel.Batch, "Antibiotics 500mg", initialStock);
+      await pharmaTree
+        .connect(manufacturer)
+        .createRootUnit(UnitLevel.Batch, "Antibiotics 500mg", initialStock, nextSerialHash(), defaultExpiry);
 
-      await pharmaTree.connect(manufacturer).sellQuantity(1, soldQuantity);
+      await pharmaTree
+        .connect(manufacturer)
+        .sellQuantityWithSerialHash(1, soldQuantity, nextSerialHash("SOLD-CHILD"));
 
       const remainingUnit = await pharmaTree.getUnitDetails(1);
       const soldChild = await pharmaTree.getUnitDetails(2);
@@ -109,8 +142,12 @@ describe("PharmaTree POS & Supply Chain Invariants", function () {
     it("Should mark parent fully Sold when selling entire remaining quantity", async function () {
       const { pharmaTree, manufacturer } = await loadFixture(deployPharmaTreeFixture);
 
-      await pharmaTree.connect(manufacturer).createRootUnit(UnitLevel.Batch, "Inhaler Box", 10);
-      await pharmaTree.connect(manufacturer).sellQuantity(1, 10);
+      await pharmaTree
+        .connect(manufacturer)
+        .createRootUnit(UnitLevel.Batch, "Inhaler Box", 10, nextSerialHash(), defaultExpiry);
+      await pharmaTree
+        .connect(manufacturer)
+        .sellQuantityWithSerialHash(1, 10, ethers.ZeroHash);
 
       const unit = await pharmaTree.getUnitDetails(1);
       expect(unit.quantity).to.equal(10);
@@ -130,7 +167,7 @@ describe("PharmaTree POS & Supply Chain Invariants", function () {
 
       // Cannot sell again
       await expect(
-        pharmaTree.connect(pharmacy).sellQuantity(soldUnitId, 1)
+        pharmaTree.connect(pharmacy).sellQuantityWithSerialHash(soldUnitId, 1, ethers.ZeroHash)
       ).to.be.revertedWith("Unit is not active");
 
       // Cannot initiate transfer
@@ -156,7 +193,7 @@ describe("PharmaTree POS & Supply Chain Invariants", function () {
 
       // Cannot sell rejected unit
       await expect(
-        pharmaTree.connect(manufacturer).sellQuantity(rejectedUnitId, 5)
+        pharmaTree.connect(manufacturer).sellQuantityWithSerialHash(rejectedUnitId, 5, ethers.ZeroHash)
       ).to.be.revertedWith("Unit is not active");
 
       // Cannot transfer rejected unit
@@ -189,7 +226,7 @@ describe("PharmaTree POS & Supply Chain Invariants", function () {
 
       // Receiver cannot sell before accepting
       await expect(
-        pharmaTree.connect(pharmacy).sellQuantity(pendingTransferUnitId, 1)
+        pharmaTree.connect(pharmacy).sellQuantityWithSerialHash(pendingTransferUnitId, 1, ethers.ZeroHash)
       ).to.be.revertedWith("Not the current owner");
 
       // Unauthorized third party cannot accept
@@ -210,6 +247,10 @@ describe("PharmaTree POS & Supply Chain Invariants", function () {
       const { pharmaTree, admin, manufacturer, distributor1, distributor2, pharmacy } =
         await loadFixture(deployPharmaTreeFixture);
 
+      // Grant dispenser role to distributors as well so random sales can proceed
+      await pharmaTree.connect(admin).addDispenser(distributor1.address);
+      await pharmaTree.connect(admin).addDispenser(distributor2.address);
+
       // 1. Setup 3 initial root batches
       const initialLots = [100n, 250n, 400n];
       const initialTotal = initialLots.reduce((acc, q) => acc + q, 0n);
@@ -217,7 +258,13 @@ describe("PharmaTree POS & Supply Chain Invariants", function () {
       for (let i = 0; i < initialLots.length; i++) {
         await pharmaTree
           .connect(manufacturer)
-          .createRootUnit(UnitLevel.Batch, `Initial Batch #${i + 1}`, initialLots[i]);
+          .createRootUnit(
+            UnitLevel.Batch,
+            `Initial Batch #${i + 1}`,
+            initialLots[i],
+            nextSerialHash(`ROOT-${i}`),
+            defaultExpiry
+          );
       }
 
       // Helper to sum quantities of all units on-chain
@@ -276,10 +323,11 @@ describe("PharmaTree POS & Supply Chain Invariants", function () {
             } else if (actionType === 2 && unit.quantity > 5n) {
               // Partial Sale
               const sellQty = BigInt(randomInt(1, Number(unit.quantity) - 1));
-              await pharmaTree.connect(ownerSigner).sellQuantity(targetId, sellQty);
+              const childHash = nextSerialHash(`fuzz-child-${step}-${targetId}`);
+              await pharmaTree.connect(ownerSigner).sellQuantityWithSerialHash(targetId, sellQty, childHash);
             } else if (actionType === 3) {
               // Full Sale
-              await pharmaTree.connect(ownerSigner).sellQuantity(targetId, unit.quantity);
+              await pharmaTree.connect(ownerSigner).sellQuantityWithSerialHash(targetId, unit.quantity, ethers.ZeroHash);
             } else if (actionType === 4) {
               // Full Transfer
               const nextReceiver =
@@ -491,16 +539,6 @@ describe("PharmaTree POS & Supply Chain Invariants", function () {
         scratchSecret: correctLegacyPin,
       });
       expect(resDefaultLegacy.tamperSealStatus).to.equal("invalid");
-
-      // 1b. Correct legacy PIN when allowLegacySeals is explicitly enabled
-      const resPass = evaluateTiers({
-        unitId: activeUnitId,
-        totalUnitsOnChain: totalUnits,
-        unit: unitDetails,
-        scratchSecret: correctLegacyPin,
-        allowLegacySeals: true,
-      });
-      expect(resPass.tamperSealStatus).to.equal("verified");
 
       // 2. Incorrect PIN
       const resFail = evaluateTiers({

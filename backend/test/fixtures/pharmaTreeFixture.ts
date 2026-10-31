@@ -57,18 +57,29 @@ export async function deployPharmaTreeWithUnitsFixture() {
   const base = await deployPharmaTreeFixture();
   const { pharmaTree, manufacturer, distributor1, pharmacy } = base;
 
+  const defaultExpiry = Math.floor(Date.now() / 1000) + 730 * 86400; // 2 years future
+  const hash1 = ethers.keccak256(ethers.toUtf8Bytes("SERIAL-UNIT-1"));
+  const hash2 = ethers.keccak256(ethers.toUtf8Bytes("SERIAL-UNIT-2"));
+  const hash3 = ethers.keccak256(ethers.toUtf8Bytes("SERIAL-UNIT-3"));
+  const hash4 = ethers.keccak256(ethers.toUtf8Bytes("SERIAL-UNIT-4"));
+  const hash5 = ethers.keccak256(ethers.toUtf8Bytes("SERIAL-UNIT-5"));
+
   // 1. activeUnit (ID 1): Batch of 100 Ibuprofen owned by manufacturer
   await pharmaTree.connect(manufacturer).createRootUnit(
     UnitLevel.Batch,
     "Ibuprofen 400mg, 100 tablets",
-    100
+    100,
+    hash1,
+    defaultExpiry
   );
 
   // 2. distributorUnit (ID 2): Transferred to and accepted by distributor1
   await pharmaTree.connect(manufacturer).createRootUnit(
     UnitLevel.Box,
     "Amoxicillin 500mg, 50 capsules",
-    50
+    50,
+    hash2,
+    defaultExpiry
   );
   await pharmaTree.connect(manufacturer).initiateTransfer(2, distributor1.address);
   await pharmaTree.connect(distributor1).acceptTransfer(2);
@@ -77,7 +88,9 @@ export async function deployPharmaTreeWithUnitsFixture() {
   await pharmaTree.connect(manufacturer).createRootUnit(
     UnitLevel.IndividualItem,
     "Aspirin 81mg, 1 pack",
-    1
+    1,
+    hash3,
+    defaultExpiry
   );
   await pharmaTree.connect(manufacturer).initiateTransfer(3, pharmacy.address);
   await pharmaTree.connect(pharmacy).acceptTransfer(3);
@@ -87,7 +100,9 @@ export async function deployPharmaTreeWithUnitsFixture() {
   await pharmaTree.connect(manufacturer).createRootUnit(
     UnitLevel.Box,
     "Damaged Box",
-    20
+    20,
+    hash4,
+    defaultExpiry
   );
   await pharmaTree.connect(manufacturer).initiateTransfer(4, distributor1.address);
   await pharmaTree.connect(distributor1).rejectTransfer(4);
@@ -96,7 +111,9 @@ export async function deployPharmaTreeWithUnitsFixture() {
   await pharmaTree.connect(manufacturer).createRootUnit(
     UnitLevel.IndividualItem,
     "Pending Cold Chain Box",
-    10
+    10,
+    hash5,
+    defaultExpiry
   );
   await pharmaTree.connect(manufacturer).initiateTransfer(5, pharmacy.address);
 

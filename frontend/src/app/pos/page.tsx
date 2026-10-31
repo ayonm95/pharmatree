@@ -123,6 +123,8 @@ export default function VendorPosPage() {
     remainingQty: number;
     soldUnitId?: number;
     isFractional?: boolean;
+    childSerial?: string;
+    isMined?: boolean;
   } | null>(null);
   const [incidentLoggedId, setIncidentLoggedId] = useState<string | null>(null);
   const [tenantInfo, setTenantInfo] = useState<{ id: string; tier: string; quotaRemaining?: number } | null>(null);
@@ -389,6 +391,8 @@ export default function VendorPosPage() {
           remainingQty: data.remainingQuantity ?? (totalAvail - dispenseQty),
           soldUnitId,
           isFractional,
+          childSerial: data.childSerial,
+          isMined: true,
         });
 
         setCurrentVerification((prev) => {
@@ -427,12 +431,20 @@ export default function VendorPosPage() {
 
         let tx: ethers.ContractTransactionResponse;
         const totalAvail = Number(currentVerification.unit.quantity);
+        let generatedChildSerial: string | undefined = undefined;
+
         if (dispenseQty >= totalAvail) {
           tx = await contract.markAsSold(unitId);
         } else {
-          tx = await contract.sellQuantity(unitId, dispenseQty);
+          generatedChildSerial = "SN" + Date.now().toString(36).toUpperCase() + Math.random().toString(36).slice(2, 6).toUpperCase();
+          const childSerialHash = ethers.keccak256(ethers.toUtf8Bytes(generatedChildSerial));
+          tx = await contract.sellQuantityWithSerialHash(unitId, dispenseQty, childSerialHash);
         }
-        await tx.wait(1);
+        const receipt = await tx.wait(1);
+
+        if (receipt?.status !== 1) {
+          throw new Error("Dispense transaction reverted on-chain");
+        }
 
         if (soundEnabled) playDispensedSuccess();
         setDispenseResult({
@@ -440,7 +452,9 @@ export default function VendorPosPage() {
           dispensedQty: dispenseQty,
           remainingQty: totalAvail - dispenseQty,
           soldUnitId: unitId,
+          childSerial: generatedChildSerial,
           isFractional: dispenseQty < totalAvail,
+          isMined: receipt.status === 1,
         });
       } else {
         if (data.error === "DEMO_QUOTA_EXCEEDED") {
@@ -1596,9 +1610,9 @@ export default function VendorPosPage() {
                                   View Sepolia Etherscan Receipt <ExternalLink size={12} />
                                 </a>
 
-                                {dispenseResult.soldUnitId && (
+                                {dispenseResult.soldUnitId && dispenseResult.isMined && (
                                   <Link
-                                    href={`/verify?unitId=${dispenseResult.soldUnitId}`}
+                                    href={`/verify?unitId=${dispenseResult.soldUnitId}${dispenseResult.childSerial ? `&serial=${encodeURIComponent(dispenseResult.childSerial)}` : ""}`}
                                     target="_blank"
                                     style={{
                                       color: "var(--color-primary)",

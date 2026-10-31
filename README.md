@@ -4,7 +4,7 @@
 [![PharmaTree CI](https://github.com/ayonm95/pharmatree/actions/workflows/ci.yml/badge.svg)](https://github.com/ayonm95/pharmatree/actions/workflows/ci.yml)
 [![Live Demo](https://img.shields.io/badge/Demo-Vercel%20Staging-black?logo=vercel)](https://pharmatree.vercel.app)
 [![Solidity](https://img.shields.io/badge/Solidity-^0.8.20_(0.8.24_Cancun)-blue?logo=solidity)](https://soliditylang.org/)
-[![Ethereum](https://img.shields.io/badge/Ethereum-Sepolia%20Testnet-627EEA?logo=ethereum)](https://sepolia.etherscan.io/address/0xbD245c7f7C8bF4A8Ec016e8C370D3e6931BeAd72)
+[![Ethereum](https://img.shields.io/badge/Ethereum-Sepolia%20Testnet-627EEA?logo=ethereum)](https://sepolia.etherscan.io/address/0xa51Fe74519fFdd2f167e74780Be7AAD155eEF345)
 [![Next.js](https://img.shields.io/badge/Next.js-16.4.3-black?logo=next.js)](https://nextjs.org/)
 [![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
 
@@ -57,7 +57,7 @@ flowchart TD
 
     subgraph Blockchain["Ethereum Sepolia Consensus Layer"]
         Forwarder["PharmaTreeForwarder.sol (ERC-2771 / EIP-712)"]
-        Contract["PharmaTree.sol (0xbD24...d72)"]
+        Contract["PharmaTree.sol (0xa51F...345)"]
         RBAC["Roles: Admin, Manufacturer, Handler"]
         Ledger["Unit Registry & Conservation (ΣQ)"]
     end
@@ -88,10 +88,10 @@ flowchart TD
 | :--- | :--- |
 | **Network** | Ethereum Sepolia Testnet |
 | **Chain ID** | `11155111` |
-| **PharmaTree Contract** | [`0xbD245c7f7C8bF4A8Ec016e8C370D3e6931BeAd72`](https://sepolia.etherscan.io/address/0xbD245c7f7C8bF4A8Ec016e8C370D3e6931BeAd72#code) (Verified) |
+| **PharmaTree Contract** | [`0xa51Fe74519fFdd2f167e74780Be7AAD155eEF345`](https://sepolia.etherscan.io/address/0xa51Fe74519fFdd2f167e74780Be7AAD155eEF345#code) (Verified) |
 | **ERC-2771 Forwarder** | [`0x2d24b5b481d0981AE7904790e9d8BF4c162b6c8c`](https://sepolia.etherscan.io/address/0x2d24b5b481d0981AE7904790e9d8BF4c162b6c8c#code) (Verified) |
 | **Hot Relayer (0 Roles)** | [`0x335684Cfb813f673fed3f2bb87BF2778D4E96A72`](https://sepolia.etherscan.io/address/0x335684Cfb813f673fed3f2bb87BF2778D4E96A72) |
-| **Deployment Block** | `12032098` |
+| **Deployment Block** | `12033849` |
 | **Solidity Compiler** | `v0.8.24+commit.e11b9ed9` (Pragma `^0.8.20`) |
 
 ### Pre-Configured Test Wallets
