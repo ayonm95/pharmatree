@@ -19,15 +19,18 @@ describe("EIP-712 Meta-Transactions & ERC-2771 Forwarder (Phase 5 & Relayer Deco
     await pharmaTree.waitForDeployment();
     const pharmaTreeAddress = await pharmaTree.getAddress();
 
-    // 3. Setup roles: manufacturer and pharmacy (handler)
+    // 3. Setup roles: manufacturer and pharmacy (handler and dispenser)
     await pharmaTree.connect(admin).addManufacturer(manufacturer.address);
     await pharmaTree.connect(admin).addHandler(pharmacy.address);
+    await pharmaTree.connect(admin).addDispenser(pharmacy.address);
 
     // CRITICAL SECURITY INVARIANT: Relayer has ZERO roles in PharmaTree
     // Verify relayer is completely unprivileged
     expect(await pharmaTree.hasRole(await pharmaTree.DEFAULT_ADMIN_ROLE(), relayer.address)).to.be.false;
     expect(await pharmaTree.hasRole(await pharmaTree.MANUFACTURER_ROLE(), relayer.address)).to.be.false;
     expect(await pharmaTree.hasRole(await pharmaTree.HANDLER_ROLE(), relayer.address)).to.be.false;
+    expect(await pharmaTree.hasRole(await pharmaTree.DISPENSER_ROLE(), relayer.address)).to.be.false;
+    expect(await pharmaTree.hasRole(await pharmaTree.QA_ROLE(), relayer.address)).to.be.false;
 
     // 4. Create an item and transfer it to the pharmacy
     await pharmaTree.connect(manufacturer).createRootUnit(

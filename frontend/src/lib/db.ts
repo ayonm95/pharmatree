@@ -17,11 +17,24 @@ if (DATABASE_URL) {
 
 // In-memory cache structures to guarantee non-throwing zero-fail operation on read-only serverless runtimes
 const inMemoryScans: Record<string, any> = {};
+const inMemoryDailyScanDedup: Record<string, boolean> = {};
 const inMemoryIncidents: DbIncidentReport[] = [];
 const inMemoryUnits: Record<string, DbUnitRecord> = {};
 const inMemoryUnitEvents: DbUnitEvent[] = [];
 const inMemoryIndexerState: Record<string, any> = {};
 const inMemorySeals: Record<string, DbSealRecord> = {};
+const inMemorySales: Record<string, DbSaleRecord> = {};
+
+export interface DbSaleRecord {
+  idempotencyKey: string;
+  unitId: number;
+  quantity: number;
+  status: "SUBMITTED" | "MINED" | "FAILED";
+  txHash?: string;
+  responsePayload?: any;
+  errorMessage?: string;
+  createdAt: number;
+}
 
 /**
  * Determine a safe, writable directory.
@@ -244,6 +257,25 @@ export async function initDbSchema(): Promise<void> {
         consumed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
       );
 
+      CREATE TABLE IF NOT EXISTS scan_logs (
+        unit_id VARCHAR(64) NOT NULL,
+        ip_hash VARCHAR(64) NOT NULL,
+        scan_date DATE DEFAULT CURRENT_DATE,
+        PRIMARY KEY (unit_id, ip_hash, scan_date)
+      );
+
+      CREATE TABLE IF NOT EXISTS sales (
+        idempotency_key VARCHAR(128) PRIMARY KEY,
+        unit_id VARCHAR(64) NOT NULL,
+        quantity INTEGER NOT NULL,
+        tx_hash VARCHAR(128),
+        status VARCHAR(32) NOT NULL,
+        response_payload JSONB,
+        error_message TEXT,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+
       -- Ensure multi-contract scoping columns exist on existing deployments
       ALTER TABLE units ADD COLUMN IF NOT EXISTS contract_address VARCHAR(42) DEFAULT '0xbd245c7f7c8bf4a8ec016e8c370d3e6931bead72';
       ALTER TABLE unit_events ADD COLUMN IF NOT EXISTS contract_address VARCHAR(42) DEFAULT '0xbd245c7f7c8bf4a8ec016e8c370d3e6931bead72';
@@ -264,7 +296,8 @@ export function hashClientIp(ip: string): string {
 }
 
 /**
- * Record a scan atomically using Postgres UPSERT or fallback to local disk/memory
+ * Record a scan atomically using Postgres UPSERT or fallback to local disk/memory.
+ * Deduplicates scans per (unit, ipHash, day) so repeat page loads or crawler hits do not inflate scan count.
  */
 export async function recordScanAtomic(
   unitId: string,
@@ -273,15 +306,28 @@ export async function recordScanAtomic(
 ): Promise<DbScanRecord> {
   const ipHash = hashClientIp(ip);
   const nowSec = Math.floor(Date.now() / 1000);
+  const dayKey = `${unitId}:${ipHash}:${new Date().toISOString().slice(0, 10)}`;
 
   if (neonPool) {
     await initDbSchema();
     try {
+      // 1. Deduplicate per (unit, ip_hash, day)
+      const logRes = await neonPool.query(
+        `INSERT INTO scan_logs (unit_id, ip_hash, scan_date)
+         VALUES ($1, $2, CURRENT_DATE)
+         ON CONFLICT (unit_id, ip_hash, scan_date) DO NOTHING
+         RETURNING scan_date;`,
+        [unitId, ipHash]
+      );
+      const isNewDailyScan = logRes.rows.length > 0;
+
+      // 2. Increment count only if this is a newly recorded (unit, ip, day)
+      const incExpr = isNewDailyScan ? "scans.scan_count + 1" : "scans.scan_count";
       const result = await neonPool.query(
         `INSERT INTO scans (unit_id, scan_count, first_scanned_at, last_scanned_at, source, ip_hash)
          VALUES ($1, 1, NOW(), NOW(), $2, $3)
          ON CONFLICT (unit_id) DO UPDATE SET
-           scan_count = scans.scan_count + 1,
+           scan_count = ${incExpr},
            last_scanned_at = NOW(),
            ip_hash = $3
          RETURNING scan_count,
@@ -296,7 +342,7 @@ export async function recordScanAtomic(
         scanCount: count,
         firstScanTime: Number(row.first_scan),
         lastScanTime: Number(row.last_scan),
-        isFirstScan: count === 1,
+        isFirstScan: count === 1 && isNewDailyScan,
       };
     } catch (err) {
       console.warn("[Database] Postgres query failed, falling back to local file/memory:", err);
@@ -304,13 +350,17 @@ export async function recordScanAtomic(
   }
 
   // Local fallback mode (guaranteed non-throwing)
+  const isNewDailyScan = !inMemoryDailyScanDedup[dayKey];
+  inMemoryDailyScanDedup[dayKey] = true;
+
   const diskScans = safeReadJson<Record<string, any>>("scans.json", {});
   const existing = inMemoryScans[unitId] || diskScans[unitId];
 
   let record: any;
   if (existing) {
+    const increment = isNewDailyScan ? 1 : 0;
     record = {
-      scanCount: existing.scanCount + 1,
+      scanCount: existing.scanCount + increment,
       firstScanTime: existing.firstScanTime,
       lastScanTime: nowSec,
       source,
@@ -500,6 +550,187 @@ export async function getIncidentsList(limit = 50): Promise<DbIncidentReport[]> 
   }
   deduped.sort((a, b) => b.timestamp - a.timestamp);
   return deduped.slice(0, limit);
+}
+
+/**
+ * Check if a duplicate incident exists within the given time window (default 1 hour)
+ * for the same (unitId, vendorAddress, tierFailed) tuple to prevent duplicate logging.
+ */
+export async function findRecentIncident(
+  unitId: string,
+  vendorAddress?: string,
+  tierFailed?: number,
+  withinSeconds = 3600
+): Promise<DbIncidentReport | null> {
+  const now = Math.floor(Date.now() / 1000);
+  const cutoff = now - withinSeconds;
+
+  if (neonPool) {
+    await initDbSchema();
+    try {
+      const res = await neonPool.query(
+        `SELECT incident_id, unit_id, raw_payload, tier_failed, reason, message,
+                vendor_address, terminal_id, latitude, longitude, notes, status,
+                EXTRACT(EPOCH FROM created_at)::BIGINT AS timestamp,
+                created_at::TEXT AS iso_date
+         FROM incidents
+         WHERE unit_id = $1
+           AND ($2::text IS NULL OR LOWER(vendor_address) = LOWER($2))
+           AND ($3::integer IS NULL OR tier_failed = $3)
+           AND created_at >= TO_TIMESTAMP($4)
+         ORDER BY created_at DESC
+         LIMIT 1;`,
+        [unitId, vendorAddress || null, tierFailed || null, cutoff]
+      );
+      if (res.rows.length > 0) {
+        const row = res.rows[0];
+        return {
+          incidentId: row.incident_id,
+          unitId: row.unit_id,
+          rawPayload: row.raw_payload,
+          tierFailed: Number(row.tier_failed),
+          reason: row.reason,
+          message: row.message,
+          vendorAddress: row.vendor_address || undefined,
+          terminalId: row.terminal_id || undefined,
+          coordinates:
+            row.latitude && row.longitude
+              ? { latitude: Number(row.latitude), longitude: Number(row.longitude) }
+              : undefined,
+          notes: row.notes || undefined,
+          status: row.status,
+          timestamp: Number(row.timestamp),
+          isoDate: row.iso_date,
+        };
+      }
+      return null;
+    } catch (err) {
+      console.warn("[Database] Postgres findRecentIncident failed, falling back:", err);
+    }
+  }
+
+  // In-memory fallback
+  const match = inMemoryIncidents.find((inc) => {
+    if (inc.unitId !== unitId) return false;
+    if (tierFailed !== undefined && inc.tierFailed !== tierFailed) return false;
+    if (vendorAddress && inc.vendorAddress?.toLowerCase() !== vendorAddress.toLowerCase()) return false;
+    return now - inc.timestamp <= withinSeconds;
+  });
+  return match || null;
+}
+
+/**
+ * Idempotency & Sales Tracking
+ */
+export async function getSaleByIdempotencyKey(key: string): Promise<DbSaleRecord | null> {
+  const cleanKey = key.trim();
+  if (neonPool) {
+    await initDbSchema();
+    try {
+      const res = await neonPool.query(
+        `SELECT idempotency_key, unit_id, quantity, tx_hash, status, response_payload, error_message,
+                EXTRACT(EPOCH FROM created_at)::BIGINT AS created_at
+         FROM sales WHERE idempotency_key = $1;`,
+        [cleanKey]
+      );
+      if (res.rows.length > 0) {
+        const r = res.rows[0];
+        return {
+          idempotencyKey: r.idempotency_key,
+          unitId: Number(r.unit_id),
+          quantity: Number(r.quantity),
+          status: r.status,
+          txHash: r.tx_hash || undefined,
+          responsePayload: r.response_payload || undefined,
+          errorMessage: r.error_message || undefined,
+          createdAt: Number(r.created_at),
+        };
+      }
+      return null;
+    } catch (err) {
+      console.warn("[Database] Postgres getSaleByIdempotencyKey failed, falling back:", err);
+    }
+  }
+  return inMemorySales[cleanKey] || null;
+}
+
+export async function recordSaleSubmitted(
+  key: string,
+  unitId: number,
+  quantity: number,
+  txHash?: string
+): Promise<void> {
+  const cleanKey = key.trim();
+  const record: DbSaleRecord = {
+    idempotencyKey: cleanKey,
+    unitId,
+    quantity,
+    status: "SUBMITTED",
+    txHash,
+    createdAt: Math.floor(Date.now() / 1000),
+  };
+  inMemorySales[cleanKey] = record;
+
+  if (neonPool) {
+    await initDbSchema();
+    try {
+      await neonPool.query(
+        `INSERT INTO sales (idempotency_key, unit_id, quantity, tx_hash, status, created_at, updated_at)
+         VALUES ($1, $2, $3, $4, 'SUBMITTED', NOW(), NOW())
+         ON CONFLICT (idempotency_key) DO UPDATE SET
+           tx_hash = EXCLUDED.tx_hash,
+           updated_at = NOW();`,
+        [cleanKey, String(unitId), quantity, txHash || null]
+      );
+    } catch (err) {
+      console.warn("[Database] Postgres recordSaleSubmitted failed:", err);
+    }
+  }
+}
+
+export async function recordSaleCompleted(
+  key: string,
+  txHash: string,
+  responsePayload: any
+): Promise<void> {
+  const cleanKey = key.trim();
+  if (inMemorySales[cleanKey]) {
+    inMemorySales[cleanKey].status = "MINED";
+    inMemorySales[cleanKey].txHash = txHash;
+    inMemorySales[cleanKey].responsePayload = responsePayload;
+  }
+  if (neonPool) {
+    await initDbSchema();
+    try {
+      await neonPool.query(
+        `UPDATE sales SET status = 'MINED', tx_hash = $2, response_payload = $3, updated_at = NOW()
+         WHERE idempotency_key = $1;`,
+        [cleanKey, txHash, JSON.stringify(responsePayload)]
+      );
+    } catch (err) {
+      console.warn("[Database] Postgres recordSaleCompleted failed:", err);
+    }
+  }
+}
+
+export async function recordSaleFailed(key: string, errorMessage: string): Promise<void> {
+  const cleanKey = key.trim();
+  if (inMemorySales[cleanKey]) {
+    inMemorySales[cleanKey].status = "FAILED";
+    inMemorySales[cleanKey].errorMessage = errorMessage;
+  }
+  if (neonPool) {
+    await initDbSchema();
+    try {
+      await neonPool.query(
+        `UPDATE sales SET status = 'FAILED', error_message = $2, updated_at = NOW()
+         WHERE idempotency_key = $1;`,
+        [cleanKey, errorMessage]
+      );
+    } catch (err) {
+      console.warn("[Database] Postgres recordSaleFailed failed:", err);
+    }
+  }
 }
 
 export interface DbUnitRecord {

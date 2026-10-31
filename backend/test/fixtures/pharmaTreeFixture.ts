@@ -35,6 +35,9 @@ export async function deployPharmaTreeFixture() {
   await pharmaTree.connect(admin).addHandler(distributor1.address);
   await pharmaTree.connect(admin).addHandler(distributor2.address);
   await pharmaTree.connect(admin).addHandler(pharmacy.address);
+  await pharmaTree.connect(admin).addDispenser(pharmacy.address);
+  await pharmaTree.connect(admin).addDispenser(manufacturer.address);
+  await pharmaTree.connect(admin).addQA(admin.address);
 
   return {
     pharmaTree,

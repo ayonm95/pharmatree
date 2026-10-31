@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { ethers } from "ethers";
 import { evaluateTiers, EvaluateTiersInput } from "../src/lib/tierEvaluator";
 
 describe("5-Tier Anti-Counterfeiting Engine (tierEvaluator)", () => {
@@ -134,5 +135,124 @@ describe("5-Tier Anti-Counterfeiting Engine (tierEvaluator)", () => {
     });
     expect(lockedResult.tamperSealStatus).toBe("locked");
     expect(lockedResult.tiers.tier5_tamperValid).toBe(false);
+  });
+
+  it("should return identical UNIT_NOT_FOUND error for wrong or missing serial as for non-existent unit", () => {
+    const serial = "SN-SECURE-9988";
+    const serialHash = ethers.keccak256(ethers.toUtf8Bytes(serial));
+    const serializedUnit = {
+      ...baseUnit,
+      serialHash,
+    };
+
+    // 1. Non-existent unit
+    const notFoundResult = evaluateTiers({
+      unitId: 1,
+      totalUnitsOnChain: BigInt(10),
+      unit: null,
+    });
+
+    // 2. Serialized unit with missing serial
+    const missingSerialResult = evaluateTiers({
+      unitId: 1,
+      totalUnitsOnChain: BigInt(10),
+      unit: serializedUnit,
+      serial: undefined,
+    });
+
+    // 3. Serialized unit with wrong serial
+    const wrongSerialResult = evaluateTiers({
+      unitId: 1,
+      totalUnitsOnChain: BigInt(10),
+      unit: serializedUnit,
+      serial: "WRONG-SERIAL-1234",
+    });
+
+    // All must fail Tier 1 with identical UNIT_NOT_FOUND reason and authentic: false
+    expect(notFoundResult.tierFailed).toBe(1);
+    expect(notFoundResult.reason).toBe("UNIT_NOT_FOUND");
+    expect(notFoundResult.authentic).toBe(false);
+
+    expect(missingSerialResult.tierFailed).toBe(1);
+    expect(missingSerialResult.reason).toBe("UNIT_NOT_FOUND");
+    expect(missingSerialResult.authentic).toBe(false);
+
+    expect(wrongSerialResult.tierFailed).toBe(1);
+    expect(wrongSerialResult.reason).toBe("UNIT_NOT_FOUND");
+    expect(wrongSerialResult.authentic).toBe(false);
+
+    // 4. Correct serial succeeds
+    const validSerialResult = evaluateTiers({
+      unitId: 1,
+      totalUnitsOnChain: BigInt(10),
+      unit: serializedUnit,
+      serial: serial,
+    });
+    expect(validSerialResult.authentic).toBe(true);
+    expect(validSerialResult.tierFailed).toBeNull();
+  });
+
+  it("should fail Tier 4 on recalled batch", () => {
+    const recalledUnit = {
+      ...baseUnit,
+      isRecalled: true,
+    };
+
+    const result = evaluateTiers({
+      unitId: 1,
+      totalUnitsOnChain: BigInt(10),
+      unit: recalledUnit,
+      vendorAddress: "0x1589df48e9F04926E260Bf813c42dFb4a71893A3",
+    });
+
+    expect(result.authentic).toBe(false);
+    expect(result.tierFailed).toBe(4);
+    expect(result.reason).toBe("RECALLED");
+    expect(result.tiers.tier4_integrity).toBe(false);
+    expect(result.message).toContain("RECALL ALERT");
+  });
+
+  it("should fail Tier 4 on expired medication", () => {
+    const pastTimestamp = Math.floor(Date.now() / 1000) - 86400; // expired yesterday
+    const expiredUnit = {
+      ...baseUnit,
+      expiry: pastTimestamp,
+    };
+
+    const result = evaluateTiers({
+      unitId: 1,
+      totalUnitsOnChain: BigInt(10),
+      unit: expiredUnit,
+      vendorAddress: "0x1589df48e9F04926E260Bf813c42dFb4a71893A3",
+    });
+
+    expect(result.authentic).toBe(false);
+    expect(result.tierFailed).toBe(4);
+    expect(result.reason).toBe("EXPIRED");
+    expect(result.tiers.tier4_integrity).toBe(false);
+    expect(result.message).toContain("EXPIRY ALERT");
+  });
+
+  it("should reject Scheme 0 legacy PIN by default unless allowLegacySeals is true", () => {
+    const legacyPin = "1537"; // baseUnit manufacturer suffix
+
+    // Default: rejected as invalid
+    const defaultRes = evaluateTiers({
+      unitId: 1,
+      totalUnitsOnChain: BigInt(10),
+      unit: baseUnit,
+      scratchSecret: legacyPin,
+    });
+    expect(defaultRes.tamperSealStatus).toBe("invalid");
+
+    // Explicit opt-in: accepted
+    const allowedRes = evaluateTiers({
+      unitId: 1,
+      totalUnitsOnChain: BigInt(10),
+      unit: baseUnit,
+      scratchSecret: legacyPin,
+      allowLegacySeals: true,
+    });
+    expect(allowedRes.tamperSealStatus).toBe("verified");
   });
 });

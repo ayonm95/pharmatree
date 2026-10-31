@@ -41,28 +41,63 @@ export interface RateLimitResult {
 }
 
 /**
+ * Normalizes an IP address. IPv4 addresses are returned trimmed.
+ * IPv6 addresses are bucketed into their /64 network CIDR prefix to prevent
+ * attackers rotating through 2^64 host addresses within the same subnet to bypass rate limits.
+ */
+export function normalizeIp(rawIp: string): string {
+  const ip = rawIp.trim();
+  if (!ip.includes(":")) {
+    return ip;
+  }
+  const cleanIp = ip.replace(/^\[|\](:\d+)?$/g, "");
+  const parts = cleanIp.split("::");
+  let segments: string[] = [];
+  if (parts.length === 1) {
+    segments = cleanIp.split(":");
+  } else {
+    const left = parts[0] ? parts[0].split(":") : [];
+    const right = parts[1] ? parts[1].split(":") : [];
+    const missing = 8 - (left.length + right.length);
+    const middle = Array(Math.max(0, missing)).fill("0");
+    segments = [...left, ...middle, ...right];
+  }
+  const prefix64 = segments
+    .slice(0, 4)
+    .map((s) => s.padStart(4, "0").toLowerCase())
+    .join(":");
+  return `${prefix64}::/64`;
+}
+
+/**
  * Extracts a resilient client IP from standard Next.js and edge platform headers.
- * Prioritizes platform-attested headers (x-vercel-forwarded-for, x-real-ip, cf-connecting-ip)
- * over client-spoofable standard x-forwarded-for.
+ * When TRUSTED_PROXY is configured, reads strictly that header to prevent header spoofing.
+ * Otherwise, uses attested platform header fallback order.
+ * All IPv6 addresses are bucketed into /64 network prefixes.
  */
 export function getClientIp(req: NextRequest): string {
-  const vercelForwarded = req.headers.get("x-vercel-forwarded-for");
-  if (vercelForwarded) {
-    return vercelForwarded.split(",")[0].trim();
+  const trustedProxy = process.env.TRUSTED_PROXY?.toLowerCase().trim();
+  let rawIp: string | null = null;
+
+  if (trustedProxy === "cloudflare" || trustedProxy === "cf-connecting-ip") {
+    rawIp = req.headers.get("cf-connecting-ip");
+  } else if (trustedProxy === "vercel" || trustedProxy === "x-vercel-forwarded-for") {
+    rawIp = req.headers.get("x-vercel-forwarded-for");
+  } else if (trustedProxy === "nginx" || trustedProxy === "x-real-ip") {
+    rawIp = req.headers.get("x-real-ip");
+  } else if (trustedProxy === "standard" || trustedProxy === "x-forwarded-for") {
+    rawIp = req.headers.get("x-forwarded-for");
+  } else {
+    // Multi-tier fallback prioritizing platform headers
+    rawIp =
+      req.headers.get("x-vercel-forwarded-for") ||
+      req.headers.get("x-real-ip") ||
+      req.headers.get("cf-connecting-ip") ||
+      req.headers.get("x-forwarded-for");
   }
-  const realIp = req.headers.get("x-real-ip");
-  if (realIp) {
-    return realIp.split(",")[0].trim();
-  }
-  const cfIp = req.headers.get("cf-connecting-ip");
-  if (cfIp) {
-    return cfIp.split(",")[0].trim();
-  }
-  const forwarded = req.headers.get("x-forwarded-for");
-  if (forwarded) {
-    return forwarded.split(",")[0].trim();
-  }
-  return "127.0.0.1";
+
+  const selected = rawIp ? rawIp.split(",")[0].trim() : "127.0.0.1";
+  return normalizeIp(selected);
 }
 
 // Initialize Upstash Redis if environment credentials exist

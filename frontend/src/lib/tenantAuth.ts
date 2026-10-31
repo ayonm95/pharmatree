@@ -10,6 +10,18 @@ import {
 export type TenantTier = "sandbox" | "starter" | "enterprise";
 export type TenantStatus = "active" | "suspended";
 
+/**
+ * Canonical Tier Quotas across the platform:
+ * - Sandbox: 10 tx/day
+ * - Starter: 100 tx/day
+ * - Enterprise: 1000 tx/day
+ */
+export const TIER_QUOTAS: Record<TenantTier, number> = {
+  sandbox: 10,
+  starter: 100,
+  enterprise: 1000,
+};
+
 export interface TenantRecord {
   id: string;
   name: string;
@@ -35,7 +47,7 @@ export const DEFAULT_DEMO_SANDBOX_TENANT: TenantRecord = {
   name: "Public Demonstration Sandbox",
   apiKeyHash: "demo_sandbox_unrestricted_hash",
   tier: "sandbox",
-  dailyQuota: 10,
+  dailyQuota: TIER_QUOTAS.sandbox,
   allowedVendors: ["*"],
   status: "active",
 };
@@ -145,9 +157,29 @@ export function resolveTenantFromHeaders(
   // 3. If no key is provided
   if (!extractedKey) {
     if (options.allowDemoFallback) {
+      const isDemoEnabled =
+        process.env.NODE_ENV === "test" ||
+        process.env.DEMO_SANDBOX_ENABLED === "true" ||
+        process.env.NEXT_PUBLIC_DEMO_SANDBOX_ENABLED === "true";
+
+      const network = (process.env.NEXT_PUBLIC_NETWORK || process.env.CHAIN_NAME || "sepolia").toLowerCase();
+      const isSepoliaOrLocal =
+        process.env.NODE_ENV === "test" ||
+        network.includes("sepolia") ||
+        network.includes("localhost") ||
+        network.includes("hardhat") ||
+        network.includes("test");
+
+      if (isDemoEnabled && isSepoliaOrLocal) {
+        return {
+          authenticated: true,
+          tenant: DEFAULT_DEMO_SANDBOX_TENANT,
+        };
+      }
       return {
-        authenticated: true,
-        tenant: DEFAULT_DEMO_SANDBOX_TENANT,
+        authenticated: false,
+        error: "MISSING_TENANT_KEY",
+        message: "Public demo sandbox is disabled in this environment. An X-Tenant-Key is required.",
       };
     }
     return {

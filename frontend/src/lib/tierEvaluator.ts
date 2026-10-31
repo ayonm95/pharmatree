@@ -3,6 +3,8 @@ import { ethers } from "ethers";
 export interface EvaluateTiersInput {
   unitId: number;
   totalUnitsOnChain: bigint;
+  serial?: string;
+  allowLegacySeals?: boolean;
   unit?: {
     parentId: string;
     rootId: string;
@@ -13,6 +15,9 @@ export interface EvaluateTiersInput {
     status: number;
     quantity: string;
     metadata: string;
+    serialHash?: string;
+    expiry?: number | bigint;
+    isRecalled?: boolean;
   } | null;
   vendorAddress?: string;
   scratchSecret?: string;
@@ -45,7 +50,16 @@ export interface EvaluateTiersResult {
  * Usable without browser, database, or RPC dependencies.
  */
 export function evaluateTiers(input: EvaluateTiersInput): EvaluateTiersResult {
-  const { unitId, totalUnitsOnChain, unit, vendorAddress, scratchSecret, sealRecord } = input;
+  const {
+    unitId,
+    totalUnitsOnChain,
+    serial,
+    allowLegacySeals,
+    unit,
+    vendorAddress,
+    scratchSecret,
+    sealRecord,
+  } = input;
 
   // 1. Tier 1: Bounds check on total registered units
   if (BigInt(unitId) > totalUnitsOnChain || unitId <= 0) {
@@ -103,6 +117,38 @@ export function evaluateTiers(input: EvaluateTiersInput): EvaluateTiersResult {
     };
   }
 
+  // Tier 1c: Serial verification (Anti-Cloning & Forgery Prevention)
+  // If unit has a registered serialHash, require correct matching serial.
+  // Missing or wrong serial returns the exact same UNIT_NOT_FOUND response as a non-existent unit.
+  if (
+    unit.serialHash &&
+    unit.serialHash !== ethers.ZeroHash &&
+    unit.serialHash !== "0x0000000000000000000000000000000000000000000000000000000000000000"
+  ) {
+    const isSerialValid =
+      typeof serial === "string" &&
+      serial.length > 0 &&
+      ethers.keccak256(ethers.toUtf8Bytes(serial)) === unit.serialHash;
+
+    if (!isSerialValid) {
+      return {
+        authentic: false,
+        tierFailed: 1,
+        reason: "UNIT_NOT_FOUND",
+        message: `Unit details could not be retrieved for Unit #${unitId}.`,
+        tiers: {
+          tier1_registered: false,
+          tier2_unsold: false,
+          tier3_custodyMatch: false,
+          tier4_integrity: false,
+          tier5_tamperValid: false,
+        },
+        diversionDetected: false,
+        tamperSealStatus: "unverified",
+      };
+    }
+  }
+
   // 2. Tier 2: Double-Dispensing & Replay Check (Status Sold == 2)
   if (unit.status === 2) {
     return {
@@ -122,13 +168,53 @@ export function evaluateTiers(input: EvaluateTiersInput): EvaluateTiersResult {
     };
   }
 
-  // 3. Tier 4: Transit Integrity Check (Status Rejected == 3)
+  // 3. Tier 4: Transit Integrity, Recall, and Expiry Checks
+  // 3a. Transit Rejection Check (Status Rejected == 3)
   if (unit.status === 3) {
     return {
       authentic: false,
       tierFailed: 4,
       reason: "REJECTED_TRANSIT",
       message: `CONTAMINATED / REJECTED BATCH: Unit #${unitId} was explicitly REJECTED in transit by an authorized handler. It must not be sold.`,
+      tiers: {
+        tier1_registered: true,
+        tier2_unsold: true,
+        tier3_custodyMatch: true,
+        tier4_integrity: false,
+        tier5_tamperValid: false,
+      },
+      diversionDetected: false,
+      tamperSealStatus: "unverified",
+    };
+  }
+
+  // 3b. Batch Recall Check
+  if (unit.isRecalled === true) {
+    return {
+      authentic: false,
+      tierFailed: 4,
+      reason: "RECALLED",
+      message: `RECALL ALERT: Unit #${unitId} belongs to a batch that has been officially recalled by the manufacturer or QA. DO NOT DISPENSE!`,
+      tiers: {
+        tier1_registered: true,
+        tier2_unsold: true,
+        tier3_custodyMatch: true,
+        tier4_integrity: false,
+        tier5_tamperValid: false,
+      },
+      diversionDetected: false,
+      tamperSealStatus: "unverified",
+    };
+  }
+
+  // 3c. Expiry Check
+  if (unit.expiry && Number(unit.expiry) > 0 && Math.floor(Date.now() / 1000) > Number(unit.expiry)) {
+    const expiryDate = new Date(Number(unit.expiry) * 1000).toISOString().split("T")[0];
+    return {
+      authentic: false,
+      tierFailed: 4,
+      reason: "EXPIRED",
+      message: `EXPIRY ALERT: Unit #${unitId} expired on ${expiryDate}. This medication has passed its safe shelf life and must not be dispensed.`,
       tiers: {
         tier1_registered: true,
         tier2_unsold: true,
@@ -170,15 +256,21 @@ export function evaluateTiers(input: EvaluateTiersInput): EvaluateTiersResult {
   } else if (sealRecord?.state === "LOCKED_REVIEW") {
     tamperSealStatus = "locked";
   } else if (scratchSecret) {
-    // Check legacy 4-digit PIN against manufacturer suffix
-    const expectedLegacyPin = unit.manufacturer.slice(-4).toLowerCase();
     const cleanSecret = scratchSecret.toLowerCase().trim();
+    const expectedLegacyPin = unit.manufacturer.slice(-4).toLowerCase();
 
-    if (
-      cleanSecret === expectedLegacyPin ||
-      cleanSecret === "pass" ||
-      cleanSecret.length >= 8
-    ) {
+    const allowLegacy =
+      allowLegacySeals ??
+      (typeof process !== "undefined" && process.env?.ALLOW_LEGACY_SEALS === "true");
+
+    if (cleanSecret === expectedLegacyPin) {
+      if (allowLegacy) {
+        tamperSealStatus = "verified";
+      } else {
+        // Scheme 0 rejected by default because PIN is derived from public address
+        tamperSealStatus = "invalid";
+      }
+    } else if (cleanSecret === "pass" || cleanSecret.length >= 8) {
       tamperSealStatus = "verified";
     } else {
       tamperSealStatus = "invalid";
@@ -194,7 +286,7 @@ export function evaluateTiers(input: EvaluateTiersInput): EvaluateTiersResult {
       tier1_registered: true,
       tier2_unsold: unit.status === 0,
       tier3_custodyMatch: isOwnStock,
-      tier4_integrity: unit.status !== 3,
+      tier4_integrity: unit.status !== 3 && !unit.isRecalled,
       tier5_tamperValid: tamperSealStatus === "verified" || tamperSealStatus === "consumed",
     },
     diversionDetected,

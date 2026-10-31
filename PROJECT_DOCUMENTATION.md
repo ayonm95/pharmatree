@@ -268,9 +268,10 @@ To defend against exterior packaging photocopies, PharmaTree binds the digital b
   - 5 failures: 24-hour lockout (`LOCKED_REVIEW`).
 - **Manufacturer Unlock Challenge**: Unlock signatures require binding `(unitId, RESET_SEAL, nonce, timestamp)`. Nonces are atomically tracked and consumed in Neon table `used_reset_nonces`.
 
-### 8.2 Scheme 0: Legacy Testnet Shorthand (Deprecated)
-- 4-digit PIN matching `manufacturer.slice(-4)` (e.g. `1537`).
-- Strictly maintained for backward-compatibility with pre-seeded testnet units #1-#9. Deprecated for all new production units.
+### 8.2 Scheme 0: Legacy Testnet Shorthand (Deprecated & Disabled by Default)
+- Scheme 0 4-digit PINs (derived from manufacturer address) are deprecated and disabled by default.
+- In production and staging, Scheme 0 verification is rejected unless explicitly enabled via `ALLOW_LEGACY_SEALS=true`.
+- All production and demo units are provisioned with Scheme 1 high-entropy Crockford Base32 HMAC verifiers.
 
 ---
 
@@ -316,16 +317,27 @@ To operate securely as a multi-tenant SaaS while protecting the relayer from gas
 | `unitCounter()` | `external view` | None | Returns total number of registered units |
 | `addManufacturer(address _mfr)` | `external` | `onlyAdmin` | Grants `MANUFACTURER_ROLE` |
 | `addHandler(address _handler)` | `external` | `onlyAdmin` | Grants `HANDLER_ROLE` |
+| `addDispenser(address _dispenser)` | `external` | `onlyAdmin` | Grants `DISPENSER_ROLE` to hospital/pharmacy dispensaries |
+| `addQA(address _qa)` | `external` | `onlyAdmin` | Grants `QA_ROLE` for quarantine clearance |
+| `removeManufacturer(address _mfr)` | `external` | `onlyAdmin` | Revokes `MANUFACTURER_ROLE` immediately |
+| `removeHandler(address _handler)` | `external` | `onlyAdmin` | Revokes `HANDLER_ROLE` immediately |
+| `removeDispenser(address _dispenser)` | `external` | `onlyAdmin` | Revokes `DISPENSER_ROLE` immediately |
+| `removeQA(address _qa)` | `external` | `onlyAdmin` | Revokes `QA_ROLE` immediately |
 | `createRootUnit(...)` | `external` | `onlyManufacturer` | Mints new top-level container/batch unit |
+| `createRootUnitWithSerial(...)` | `external` | `onlyManufacturer` | Mints root unit with immutable `serialHash = keccak256(serial)` and expiry |
 | `createChildUnits(...)` | `external` | `onlyCurrentOwner` | Mints packed child units under active parent |
-| `initiatePartialTransfer(...)` | `external` | `onlyCurrentOwner` | Splits and transfers partial quantity to authorized receiver |
+| `createChildUnitsWithSerial(...)` | `external` | `onlyCurrentOwner` | Mints child units with registered `serialHash` |
+| `initiateTransfer(...)` | `external` | `onlyCurrentOwner` | Transfers unit to authorized handler |
 | `acceptTransfer(uint256 _id)` | `external` | `pendingReceiver` | Accepts incoming transfer into active custody |
 | `rejectTransfer(uint256 _id)` | `external` | `pendingReceiver` | Rejects incoming shipment; sets `Status.Rejected` |
 | `cancelTransfer(uint256 _id)` | `external` | `onlyCurrentOwner` | Cancels pending transfer prior to receiver action |
-| `reclaimRejectedUnit(uint256 _id)`| `external` | `onlyCurrentOwner` | Restores rejected unit to active inventory after inspection |
-| `markAsSold(uint256 _id)` | `external` | `onlyCurrentOwner` | Marks entire active unit as sold (terminal state) |
-| `sellQuantity(uint256 _id, uint256 _qty)`| `external` | `onlyCurrentOwner` | Splits inventory; detaches sold child unit |
-| `getUnitDetails(uint256 _id)` | `external view` | None | Returns full unit tuple (parent, root, owner, status, quantity, etc.) |
+| `clearRejected(uint256 _id, bytes32 _evidenceHash)` | `external` | `onlyQA` | Verifiable QA audit clearance restoring unit to active status |
+| `recallRoot(uint256 _rootId)` | `external` | `Manufacturer / QA` | Freezes entire batch/root hierarchy from retail sale |
+| `unrecallRoot(uint256 _rootId)` | `external` | `Manufacturer / QA` | Lifts batch recall freeze |
+| `markAsSold(uint256 _id)` | `external` | `onlyOwner onlyDispenser dispensable` | Marks active unit as sold (blocks expired/recalled units) |
+| `sellQuantity(uint256 _id, uint256 _qty)` | `external` | `onlyOwner onlyDispenser dispensable` | Splits stock and marks child unit as sold |
+| `verifySerial(uint256 _id, string _serial)` | `external view` | None | Validates unguessable serial against stored `serialHash` |
+| `getUnitDetails(uint256 _id)` | `external view` | None | Returns full unit tuple (parent, root, owner, status, quantity, serialHash, expiry) |
 
 ### 11.2 Emitted Events
 
@@ -336,7 +348,10 @@ To operate securely as a multi-tenant SaaS while protecting the relayer from gas
 | `TransferCompleted` | `uint256 indexed id`, `address indexed from`, `address indexed to` | None |
 | `TransferRejected` | `uint256 indexed id`, `address indexed from`, `address indexed rejectedBy` | None |
 | `TransferCancelled` | `uint256 indexed id`, `address indexed cancelledBy` | None |
-| `UnitReclaimed` | `uint256 indexed id`, `address indexed reclaimedBy` | None |
+| `RejectedCleared` | `uint256 indexed id`, `address indexed clearedBy` | `bytes32 evidenceHash` |
+| `UnitSold` | `uint256 indexed id`, `address indexed soldBy` | None |
+| `RootRecalled` | `uint256 indexed rootId`, `address indexed recalledBy` | None |
+| `RootUnrecalled` | `uint256 indexed rootId`, `address indexed unrecalledBy` | None |
 | `UnitSold` | `uint256 indexed id`, `address indexed soldBy` | None |
 
 ---

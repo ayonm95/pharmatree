@@ -117,5 +117,30 @@ describe("POS Sell API Security Policies", () => {
       expect(ip2Allowed.allowed).toBe(true);
       expect(ip2Allowed.remaining).toBe(2);
     });
+
+    it("should track and record sales idempotency states to prevent duplicate broadcasts", async () => {
+      const {
+        getSaleByIdempotencyKey,
+        recordSaleSubmitted,
+        recordSaleCompleted,
+      } = await import("../src/lib/db");
+
+      const testKey = `idem-key-${Date.now()}`;
+      expect(await getSaleByIdempotencyKey(testKey)).toBeNull();
+
+      // 1. Record submitted
+      await recordSaleSubmitted(testKey, 101, 5, "0xPendingHash123");
+      const submitted = await getSaleByIdempotencyKey(testKey);
+      expect(submitted?.status).toBe("SUBMITTED");
+      expect(submitted?.unitId).toBe(101);
+
+      // 2. Record completed
+      const mockPayload = { success: true, txHash: "0xMinedHash456", unitId: 101 };
+      await recordSaleCompleted(testKey, "0xMinedHash456", mockPayload);
+      const mined = await getSaleByIdempotencyKey(testKey);
+      expect(mined?.status).toBe("MINED");
+      expect(mined?.txHash).toBe("0xMinedHash456");
+      expect(mined?.responsePayload?.success).toBe(true);
+    });
   });
 });

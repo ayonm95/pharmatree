@@ -14,7 +14,13 @@ import {
   getRateLimitHeaders,
   parseSafePositiveInt,
 } from "@/lib/rateLimit";
-import { withRelayerLock } from "@/lib/db";
+import {
+  withRelayerLock,
+  getSaleByIdempotencyKey,
+  recordSaleSubmitted,
+  recordSaleCompleted,
+  recordSaleFailed,
+} from "@/lib/db";
 import {
   resolveTenantFromHeadersAsync,
   isVendorAllowedForTenant,
@@ -103,6 +109,34 @@ export async function POST(req: NextRequest) {
   const tenant = tenantResolution.tenant;
   rateHeaders["X-Tenant-ID"] = tenant.id;
   rateHeaders["X-Tenant-Tier"] = tenant.tier;
+
+  const idempotencyKey =
+    req.headers.get("idempotency-key") || req.headers.get("x-idempotency-key");
+  if (idempotencyKey) {
+    const existing = await getSaleByIdempotencyKey(idempotencyKey);
+    if (existing) {
+      if (existing.status === "MINED" && existing.responsePayload) {
+        return NextResponse.json(existing.responsePayload, {
+          headers: {
+            ...rateHeaders,
+            "X-Idempotency-Replay": "true",
+          },
+        });
+      }
+      if (existing.status === "SUBMITTED") {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "TRANSACTION_IN_PROGRESS",
+            txHash: existing.txHash,
+            message:
+              "A dispensing transaction with this Idempotency-Key has already been submitted and is pending confirmation.",
+          },
+          { status: 409, headers: rateHeaders }
+        );
+      }
+    }
+  }
 
   try {
     const body = await req.json();
@@ -294,32 +328,55 @@ export async function POST(req: NextRequest) {
         );
       }
 
+      // staticCall simulation pre-check before submitting on-chain transaction
+      try {
+        await forwarder.execute.staticCall(fwd);
+      } catch (simErr: any) {
+        const revertReason =
+          simErr?.reason || simErr?.shortMessage || simErr?.message || "Execution simulation reverted";
+        return NextResponse.json(
+          {
+            success: false,
+            error: "SIMULATION_REVERTED",
+            message: `Pre-execution staticCall reverted: ${revertReason}`,
+          },
+          { status: 400, headers: rateHeaders }
+        );
+      }
+
+      if (idempotencyKey) {
+        await recordSaleSubmitted(idempotencyKey, unitId, dispenseQty);
+      }
+
       const tx = await withRelayerLock(() =>
         executeWithNonceRetry(relayerWallet, (nonce) => forwarder.execute(fwd, { nonce }))
       );
       const receipt = await tx.wait(1);
 
-      return NextResponse.json(
-        {
-          success: true,
-          relayed: true,
-          txHash: tx.hash,
-          blockNumber: receipt?.blockNumber,
-          unitId,
-          dispensedQuantity: dispenseQty,
-          remainingQuantity: unitQuantity - dispenseQty,
-          isFractional: dispenseQty < unitQuantity,
-          quotaRemaining: quota.remaining,
-          tenant: {
-            id: tenant.id,
-            name: tenant.name,
-            tier: tenant.tier,
-            quotaRemaining: tenantQuota.remaining,
-          },
-          timestamp: Math.floor(Date.now() / 1000),
+      const responsePayload = {
+        success: true,
+        relayed: true,
+        txHash: tx.hash,
+        blockNumber: receipt?.blockNumber,
+        unitId,
+        dispensedQuantity: dispenseQty,
+        remainingQuantity: unitQuantity - dispenseQty,
+        isFractional: dispenseQty < unitQuantity,
+        quotaRemaining: quota.remaining,
+        tenant: {
+          id: tenant.id,
+          name: tenant.name,
+          tier: tenant.tier,
+          quotaRemaining: tenantQuota.remaining,
         },
-        { headers: rateHeaders }
-      );
+        timestamp: Math.floor(Date.now() / 1000),
+      };
+
+      if (idempotencyKey) {
+        await recordSaleCompleted(idempotencyKey, tx.hash, responsePayload);
+      }
+
+      return NextResponse.json(responsePayload, { headers: rateHeaders });
     }
 
     // 6. Direct Relayer Execution (Self-Owned Units Only)
@@ -345,6 +402,31 @@ export async function POST(req: NextRequest) {
 
     // 7. Execute on-chain dispense via relayer wallet (only for self-owned units)
     const writeContract = new ethers.Contract(PHARMA_TREE_CONTRACT, PHARMA_TREE_ABI, relayerWallet);
+
+    // staticCall simulation pre-check
+    try {
+      if (dispenseQty === unitQuantity) {
+        await writeContract.markAsSold.staticCall(unitId);
+      } else {
+        await writeContract.sellQuantity.staticCall(unitId, dispenseQty);
+      }
+    } catch (simErr: any) {
+      const revertReason =
+        simErr?.reason || simErr?.shortMessage || simErr?.message || "Simulation reverted";
+      return NextResponse.json(
+        {
+          success: false,
+          error: "SIMULATION_REVERTED",
+          message: `Pre-execution staticCall reverted: ${revertReason}`,
+        },
+        { status: 400, headers: rateHeaders }
+      );
+    }
+
+    if (idempotencyKey) {
+      await recordSaleSubmitted(idempotencyKey, unitId, dispenseQty);
+    }
+
     const tx = await withRelayerLock(() =>
       executeWithNonceRetry(relayerWallet, (nonce) => {
         if (dispenseQty === unitQuantity) {
@@ -357,26 +439,32 @@ export async function POST(req: NextRequest) {
 
     const receipt = await tx.wait(1);
 
-    return NextResponse.json(
-      {
-        success: true,
-        txHash: tx.hash,
-        blockNumber: receipt?.blockNumber,
-        unitId,
-        dispensedQuantity: dispenseQty,
-        remainingQuantity: unitQuantity - dispenseQty,
-        isFractional: dispenseQty < unitQuantity,
-        tenant: {
-          id: tenant.id,
-          name: tenant.name,
-          tier: tenant.tier,
-          quotaRemaining: tenantQuota.remaining,
-        },
-        timestamp: Math.floor(Date.now() / 1000),
+    const responsePayload = {
+      success: true,
+      txHash: tx.hash,
+      blockNumber: receipt?.blockNumber,
+      unitId,
+      dispensedQuantity: dispenseQty,
+      remainingQuantity: unitQuantity - dispenseQty,
+      isFractional: dispenseQty < unitQuantity,
+      tenant: {
+        id: tenant.id,
+        name: tenant.name,
+        tier: tenant.tier,
+        quotaRemaining: tenantQuota.remaining,
       },
-      { headers: rateHeaders }
-    );
+      timestamp: Math.floor(Date.now() / 1000),
+    };
+
+    if (idempotencyKey) {
+      await recordSaleCompleted(idempotencyKey, tx.hash, responsePayload);
+    }
+
+    return NextResponse.json(responsePayload, { headers: rateHeaders });
   } catch (err: any) {
+    if (idempotencyKey) {
+      await recordSaleFailed(idempotencyKey, err.message || "Dispense transaction failed");
+    }
     console.error("Error in /api/pos/sell:", err);
     return NextResponse.json(
       {

@@ -211,13 +211,20 @@ describe("PharmaTree Smart Contract", function () {
       expect(unit.pendingReceiver).to.equal(ethers.ZeroAddress);
     });
 
-    it("Should allow the owner to reclaim a rejected unit", async function () {
+    it("Should allow authorized QA to clear a rejected unit with evidence hash and prevent unprivileged sender", async function () {
       await pharmaTree.connect(manufacturer).initiateTransfer(1, distributor.address);
       await pharmaTree.connect(distributor).rejectTransfer(1);
 
-      await expect(pharmaTree.connect(manufacturer).reclaimRejectedUnit(1))
-        .to.emit(pharmaTree, "UnitReclaimed")
-        .withArgs(1, manufacturer.address);
+      // Sender (non-QA) cannot clear rejected
+      const dummyHash = ethers.keccak256(ethers.toUtf8Bytes("QA-INSPECTION-PASS-DOC-42"));
+      await expect(
+        pharmaTree.connect(manufacturer).clearRejected(1, dummyHash)
+      ).to.be.revertedWith("Caller is not authorized QA");
+
+      // Authorized QA clears rejected
+      await expect(pharmaTree.connect(admin).clearRejected(1, dummyHash))
+        .to.emit(pharmaTree, "RejectedCleared")
+        .withArgs(1, admin.address, dummyHash);
 
       const unit = await pharmaTree.getUnitDetails(1);
       expect(unit.status).to.equal(Status.Active);
@@ -312,6 +319,140 @@ describe("PharmaTree Smart Contract", function () {
       await expect(
         pharmaTree.connect(manufacturer).sellQuantity(1, 1)
       ).to.be.revertedWith("Unit is not active");
+    });
+  });
+
+  describe("Security Hardening: RBAC, Revocation, Expiry & Recalls", function () {
+    it("Should prevent a Handler without Dispenser role from selling", async function () {
+      // Distributor has HANDLER_ROLE but NOT DISPENSER_ROLE
+      await pharmaTree.connect(manufacturer).createRootUnit(UnitLevel.IndividualItem, "Item 1", 1);
+      await pharmaTree.connect(manufacturer).initiateTransfer(1, distributor.address);
+      await pharmaTree.connect(distributor).acceptTransfer(1);
+
+      await expect(
+        pharmaTree.connect(distributor).markAsSold(1)
+      ).to.be.revertedWith("Caller is not an authorized dispenser");
+
+      await expect(
+        pharmaTree.connect(distributor).sellQuantity(1, 1)
+      ).to.be.revertedWith("Caller is not an authorized dispenser");
+    });
+
+    it("Should allow admin to revoke roles and cut off compromised actors", async function () {
+      // Revoke handler
+      await pharmaTree.connect(admin).removeHandler(distributor.address);
+      expect(await pharmaTree.isHandler(distributor.address)).to.be.false;
+
+      await pharmaTree.connect(manufacturer).createRootUnit(UnitLevel.IndividualItem, "Item 2", 1);
+      await expect(
+        pharmaTree.connect(manufacturer).initiateTransfer(1, distributor.address)
+      ).to.be.revertedWith("Receiver is not authorized");
+
+      // Revoke dispenser
+      await pharmaTree.connect(admin).removeDispenser(pharmacy.address);
+      expect(await pharmaTree.isDispenser(pharmacy.address)).to.be.false;
+      await pharmaTree.connect(manufacturer).initiateTransfer(1, pharmacy.address);
+      await pharmaTree.connect(pharmacy).acceptTransfer(1);
+
+      await expect(
+        pharmaTree.connect(pharmacy).markAsSold(1)
+      ).to.be.revertedWith("Caller is not an authorized dispenser");
+
+      // Revoke QA
+      await pharmaTree.connect(admin).removeQA(admin.address);
+      expect(await pharmaTree.isQA(admin.address)).to.be.false;
+      const dummyHash = ethers.keccak256(ethers.toUtf8Bytes("EVIDENCE-HASH"));
+      // Even if admin, admin modifier check in onlyQA checks role
+      // But onlyQA checks hasRole(QA_ROLE) || hasRole(DEFAULT_ADMIN_ROLE).
+      // Let's create an explicit QA account
+      const [, , , , , , qaUser] = await ethers.getSigners();
+      await pharmaTree.connect(admin).addQA(qaUser.address);
+      expect(await pharmaTree.isQA(qaUser.address)).to.be.true;
+      await pharmaTree.connect(admin).removeQA(qaUser.address);
+      expect(await pharmaTree.isQA(qaUser.address)).to.be.false;
+      await expect(
+        pharmaTree.connect(qaUser).clearRejected(1, dummyHash)
+      ).to.be.revertedWith("Caller is not authorized QA");
+    });
+
+    it("Should verify serial numbers against stored serialHash and prevent cloned QR codes", async function () {
+      const serial = "SN-2026-XYZ-998877";
+      const pastExpiry = 0;
+      await pharmaTree.connect(manufacturer).createRootUnitWithSerial(
+        UnitLevel.Box,
+        "Box with Secure Serial",
+        10,
+        serial,
+        pastExpiry
+      );
+
+      const unit = await pharmaTree.getUnitDetails(1);
+      const expectedHash = ethers.keccak256(ethers.toUtf8Bytes(serial));
+      expect(unit.serialHash).to.equal(expectedHash);
+
+      // Verification check on-chain
+      expect(await pharmaTree.verifySerial(1, serial)).to.be.true;
+      expect(await pharmaTree.verifySerial(1, "WRONG-SERIAL-FORGED")).to.be.false;
+    });
+
+    it("Should prevent selling an expired unit", async function () {
+      const now = Math.floor(Date.now() / 1000);
+      const expiredTimestamp = now - 3600; // expired 1 hour ago
+      await pharmaTree.connect(manufacturer).createRootUnitWithSerial(
+        UnitLevel.IndividualItem,
+        "Expired Ampoule",
+        1,
+        "SN-EXPIRED-01",
+        expiredTimestamp
+      );
+
+      await expect(
+        pharmaTree.connect(manufacturer).sellQuantity(1, 1)
+      ).to.be.revertedWith("Unit is expired");
+
+      await expect(
+        pharmaTree.connect(manufacturer).markAsSold(1)
+      ).to.be.revertedWith("Unit is expired");
+    });
+
+    it("Should enforce recall freeze and prevent dispensing recalled roots", async function () {
+      await pharmaTree.connect(manufacturer).createRootUnit(
+        UnitLevel.Batch,
+        "Batch Under Investigation",
+        50
+      );
+
+      // Recall root
+      await expect(pharmaTree.connect(manufacturer).recallRoot(1))
+        .to.emit(pharmaTree, "RootRecalled")
+        .withArgs(1, manufacturer.address);
+
+      expect(await pharmaTree.recalledRoots(1)).to.be.true;
+
+      // Sale must revert
+      await expect(
+        pharmaTree.connect(manufacturer).sellQuantity(1, 10)
+      ).to.be.revertedWith("Batch is recalled");
+
+      await expect(
+        pharmaTree.connect(manufacturer).markAsSold(1)
+      ).to.be.revertedWith("Batch is recalled");
+
+      // Non-privileged cannot unrecall
+      await expect(
+        pharmaTree.connect(unauthorized).unrecallRoot(1)
+      ).to.be.revertedWith("Not authorized to unrecall");
+
+      // Authorized manufacturer unrecalls after investigation
+      await expect(pharmaTree.connect(manufacturer).unrecallRoot(1))
+        .to.emit(pharmaTree, "RootUnrecalled")
+        .withArgs(1, manufacturer.address);
+
+      expect(await pharmaTree.recalledRoots(1)).to.be.false;
+
+      // Sale succeeds once un-recalled
+      await expect(pharmaTree.connect(manufacturer).sellQuantity(1, 10))
+        .to.emit(pharmaTree, "UnitSold");
     });
   });
 });

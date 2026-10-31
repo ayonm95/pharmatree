@@ -108,10 +108,10 @@ flowchart TD
 
 | Tier | Verification Check | Threat Addressed | Action on Failure |
 | :--- | :--- | :--- | :--- |
-| **Tier 1** | **Registry Genesis** | Forged barcodes, unregistered batch numbers | **UNREGISTERED_ID**: Siren alarm, blocks dispensing, logs incident |
-| **Tier 2** | **Anti-Replay** | Double-dispensing, photocopied carton stickers | **ALREADY_SOLD_REPLAY**: Reverts on-chain, flags duplicate |
+| **Tier 1** | **Registry Genesis & Serial Hash** | Forged barcodes, sequential ID guessing, cloned QRs | **UNIT_NOT_FOUND**: Uniform 404 response preventing ID enumeration |
+| **Tier 2** | **Anti-Replay** | Double-dispensing, photocopied carton stickers | **ALREADY_SOLD_REPLAY**: Reverts on-chain, flags duplicate packaging |
 | **Tier 3** | **Custody Audit** | Stolen or diverted stock bypassing transfer handshakes | **CUSTODY_MISMATCH**: Flags non-owned inventory (incoming pending shipments display as in-transit) |
-| **Tier 4** | **Transit Integrity** | Contaminated, damaged, or rejected shipments | **REJECTED_TRANSIT**: Prevents dispensing of rejected stock |
+| **Tier 4** | **Transit Integrity, Expiry & Recalls** | Contaminated transit, expired medicine, or recalled batches | **REJECTED_TRANSIT / EXPIRED / RECALLED**: Blocks dispensing; requires QA audit clearance |
 | **Tier 5** | **Physical Scratch Seal** | Visual photocopies of authentic boxes | **BROKEN / FORGED SEAL**: Requires 12-char Crockford Base32 HMAC |
 
 ---

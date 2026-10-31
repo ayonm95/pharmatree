@@ -7,7 +7,7 @@ import {
   UnitLevel,
   Status,
 } from "./fixtures/pharmaTreeFixture";
-import { evaluateTiers } from "./helpers/tierEvaluator";
+import { evaluateTiers } from "../../frontend/src/lib/tierEvaluator";
 
 describe("PharmaTree POS & Supply Chain Invariants", function () {
   describe("Invariant 1: Monotonic Unit Registration & Global Counter", function () {
@@ -142,7 +142,7 @@ describe("PharmaTree POS & Supply Chain Invariants", function () {
 
   describe("Invariant 6: Transit Rejection & Quarantine Isolation", function () {
     it("Should isolate rejected units from transfer or dispensing until reclaimed", async function () {
-      const { pharmaTree, rejectedUnitId, manufacturer, distributor1, pharmacy } =
+      const { pharmaTree, rejectedUnitId, manufacturer, distributor1, pharmacy, admin } =
         await loadFixture(deployPharmaTreeWithUnitsFixture);
 
       const rejectedUnit = await pharmaTree.getUnitDetails(rejectedUnitId);
@@ -164,8 +164,14 @@ describe("PharmaTree POS & Supply Chain Invariants", function () {
         pharmaTree.connect(manufacturer).initiateTransfer(rejectedUnitId, pharmacy.address)
       ).to.be.revertedWith("Unit not active");
 
-      // Reclaim restores Active status
-      await pharmaTree.connect(manufacturer).reclaimRejectedUnit(rejectedUnitId);
+      // Sender cannot self-unreject
+      const dummyEvidence = ethers.keccak256(ethers.toUtf8Bytes("QA-INSPECTION-PASS-REMEDY"));
+      await expect(
+        pharmaTree.connect(manufacturer).clearRejected(rejectedUnitId, dummyEvidence)
+      ).to.be.revertedWith("Caller is not authorized QA");
+
+      // QA clears rejected unit with verifiable audit evidence hash
+      await pharmaTree.connect(admin).clearRejected(rejectedUnitId, dummyEvidence);
       const reclaimed = await pharmaTree.getUnitDetails(rejectedUnitId);
       expect(reclaimed.status).to.equal(Status.Active);
     });
@@ -475,13 +481,23 @@ describe("PharmaTree POS & Supply Chain Invariants", function () {
         metadata: unit.metadata,
       };
 
-      // 1. Correct legacy PIN
+      // 1. Scheme 0 legacy PIN rejected by default (Anti-Tamper Hardening)
       const correctLegacyPin = manufacturer.address.slice(-4).toLowerCase();
+      const resDefaultLegacy = evaluateTiers({
+        unitId: activeUnitId,
+        totalUnitsOnChain: totalUnits,
+        unit: unitDetails,
+        scratchSecret: correctLegacyPin,
+      });
+      expect(resDefaultLegacy.tamperSealStatus).to.equal("invalid");
+
+      // 1b. Correct legacy PIN when allowLegacySeals is explicitly enabled
       const resPass = evaluateTiers({
         unitId: activeUnitId,
         totalUnitsOnChain: totalUnits,
         unit: unitDetails,
         scratchSecret: correctLegacyPin,
+        allowLegacySeals: true,
       });
       expect(resPass.tamperSealStatus).to.equal("verified");
 

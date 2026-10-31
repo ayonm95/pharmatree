@@ -33,6 +33,35 @@ describe("Platform Security, IP Resolution & Vendor Quotas", () => {
       });
       expect(getClientIp(req)).toBe("198.51.100.99");
     });
+
+    it("should strictly enforce single header when TRUSTED_PROXY is set", () => {
+      const orig = process.env.TRUSTED_PROXY;
+      try {
+        process.env.TRUSTED_PROXY = "cloudflare";
+        const req = new NextRequest("http://localhost:3000/api/pos/verify", {
+          headers: {
+            "x-vercel-forwarded-for": "10.99.99.99", // Spoofed header
+            "cf-connecting-ip": "198.51.100.42",    // True Cloudflare IP
+          },
+        });
+        expect(getClientIp(req)).toBe("198.51.100.42");
+      } finally {
+        process.env.TRUSTED_PROXY = orig;
+      }
+    });
+
+    it("should bucket IPv6 addresses into /64 network CIDR prefixes", () => {
+      const req1 = new NextRequest("http://localhost:3000/api/pos/verify", {
+        headers: { "x-real-ip": "2001:0db8:85a3:0000:0000:8a2e:0370:7334" },
+      });
+      const req2 = new NextRequest("http://localhost:3000/api/pos/verify", {
+        headers: { "x-real-ip": "2001:0db8:85a3:0000:ffff:ffff:ffff:ffff" },
+      });
+      const ip1 = getClientIp(req1);
+      const ip2 = getClientIp(req2);
+      expect(ip1).toBe(ip2);
+      expect(ip1).toBe("2001:0db8:85a3:0000::/64");
+    });
   });
 
   describe("HMAC Server-Secret Client IP Hashing", () => {
