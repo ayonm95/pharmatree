@@ -1,7 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
+import { ethers } from "ethers";
 import { getUnitsPaginated } from "@/lib/db";
 import { syncChainEvents } from "@/lib/indexer";
 import { checkRateLimitAsync, getRateLimitHeaders } from "@/lib/rateLimit";
+import { PHARMA_TREE_ABI, PHARMA_TREE_CONTRACT } from "@/lib/pharmaTree";
+import { readonlyProvider } from "@/lib/rpc";
 
 export const dynamic = "force-dynamic";
 
@@ -30,14 +33,28 @@ export async function GET(request: NextRequest) {
     const status = statusParam !== null && statusParam !== "" ? Number(statusParam) : undefined;
     const shouldRefresh = searchParams.get("refresh") === "true" || searchParams.get("refresh") === "1";
 
+    const contract = new ethers.Contract(PHARMA_TREE_CONTRACT, PHARMA_TREE_ABI, readonlyProvider);
+    let totalOnChain = 0;
+    try {
+      const counter = await contract.unitCounter();
+      totalOnChain = Number(counter);
+    } catch (countErr) {
+      console.warn("[API Units] Failed to query on-chain unitCounter:", countErr);
+    }
+
     if (shouldRefresh) {
       await syncChainEvents();
     }
 
     let result = await getUnitsPaginated({ limit, cursor, owner, status });
 
-    // If database projection is cold/empty on first start, trigger backfill sync
-    if (result.total === 0 && !shouldRefresh) {
+    // If database projection is cold/empty or missing on-chain units, trigger backfill sync
+    const needsBackfill = !shouldRefresh && (
+      result.total === 0 ||
+      (!owner && status === undefined && totalOnChain > 0 && result.total < totalOnChain)
+    );
+
+    if (needsBackfill) {
       await syncChainEvents();
       result = await getUnitsPaginated({ limit, cursor, owner, status });
     }

@@ -184,12 +184,26 @@ export function useChainData() {
 
   const fetchAllUnits = useCallback(async (contractInstance: ethers.Contract): Promise<UnitRecord[]> => {
     try {
+      let onChainCount = 0;
+      try {
+        const count = await contractInstance.unitCounter();
+        onChainCount = Number(count);
+      } catch (countErr) {
+        console.warn("Could not read unitCounter from RPC:", countErr);
+      }
+
       // Fast path: Query indexed database projection endpoint
       try {
         const res = await fetch("/api/units?limit=100");
         if (res.ok) {
           const data = await res.json();
-          if (data.success && Array.isArray(data.units) && data.units.length > 0) {
+          // Ensure the fast API returned all registered units, not an incomplete slice
+          if (
+            data.success &&
+            Array.isArray(data.units) &&
+            data.units.length > 0 &&
+            (onChainCount === 0 || data.units.length >= onChainCount)
+          ) {
             const unitsList: UnitRecord[] = data.units.map((u: any) => ({
               id: String(u.unitId),
               displayId: String(u.unitId),
@@ -236,8 +250,8 @@ export function useChainData() {
         console.warn("Fast indexer API fetch bypassed, using direct RPC:", apiErr);
       }
 
-      // Fallback: Direct RPC loop if API is offline
-      const count = await contractInstance.unitCounter();
+      // Fallback: Direct RPC loop if API is offline or projection is incomplete
+      const count = onChainCount > 0 ? BigInt(onChainCount) : await contractInstance.unitCounter();
       const countNum = Number(count);
       if (countNum <= 0) return [];
 

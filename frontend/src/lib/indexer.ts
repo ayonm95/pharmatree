@@ -10,7 +10,7 @@ import {
   DbUnitEvent,
 } from "./db";
 
-const DEFAULT_DEPLOYMENT_BLOCK = 11995000;
+const DEFAULT_DEPLOYMENT_BLOCK = 11928000;
 let isIndexing = false;
 
 export interface IndexerSyncResult {
@@ -202,11 +202,13 @@ export async function syncChainEvents(forceFromBlock?: number): Promise<IndexerS
       totalUnitsOnChain = 0;
     }
 
-    // If initial sync or touched units exist, hydrate state
-    for (let i = 1; i <= totalUnitsOnChain; i++) {
-      if (touchedUnitIds.has(i) || touchedUnitIds.size === 0) {
-        await hydrateUnit(contract, i);
+    // Hydrate all registered units on-chain to guarantee 100% database projection completeness
+    if (totalUnitsOnChain > 0) {
+      const hydrationPromises: Promise<any>[] = [];
+      for (let i = 1; i <= totalUnitsOnChain; i++) {
+        hydrationPromises.push(hydrateUnit(contract, i));
       }
+      await Promise.all(hydrationPromises);
     }
 
     await setLastIndexedBlock(latestBlock);
