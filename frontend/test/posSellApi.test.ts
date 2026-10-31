@@ -4,8 +4,6 @@ import {
   resolveTenantFromHeaders,
   isVendorAllowedForTenant,
   checkTenantDailyQuota,
-  registerTenantInMemory,
-  hashApiKey,
   TenantRecord,
 } from "../src/lib/tenantAuth";
 
