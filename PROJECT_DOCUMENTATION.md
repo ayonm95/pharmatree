@@ -508,7 +508,7 @@ Always use dedicated testnet wallets with non-real funds.
 ### 12.1 Automated Testing & Linting:
 
 ```bash
-# Automated tests across 8 test suites (82 tests passing: 65 Hardhat + 17 Vitest, 93.59% Solidity statement coverage)
+# Automated tests across 9 test suites (100 tests passing: 65 Hardhat + 35 Vitest, 93.59% Solidity statement coverage)
 npm test
 
 # Frontend code quality & types
@@ -566,12 +566,22 @@ Protects against brute-force unit ID scanning and RPC node exhaustion:
 Provides live system telemetry for automated uptime monitoring (DataDog, Prometheus, AWS Route53):
 - **RPC Availability & Latency**: Tests connectivity to Sepolia nodes and reports millisecond round-trip time.
 - **Contract Operability**: Queries live unit count on `0xbD245c7f7C8bF4A8Ec016e8C370D3e6931BeAd72` (Forwarder: `0x2d24b5b481d0981AE7904790e9d8BF4c162b6c8c`).
-- **Relayer Solvency**: Checks gasless relayer balance (`0x6537...1537`), verifying it holds $>0.005$ ETH for transaction sponsorship without exposing private keys.
+- **Relayer Solvency**: Checks gasless relayer balance (`0x335684Cfb813f673fed3f2bb87BF2778D4E96A72`), verifying it holds $>0.005$ ETH for transaction sponsorship without exposing private keys. The hot relayer holds zero contract roles.
 - **Runtime Metrics**: Reports memory RSS, heap usage, and server uptime.
 
 ### 13.5 React 19 Client Error Boundaries
 - **`app/error.tsx`**: Catches route-level rendering exceptions, displaying diagnostic error digests with a one-click "Retry Operation" trigger.
 - **`app/global-error.tsx`**: Catches root layout disruptions, presenting a standalone emergency recovery layout.
+
+### 13.6 Multi-Tenant POS API Authentication & Anti-DoS Gas Throttling (`lib/tenantAuth.ts`)
+- **Constant-Time Verification**: API keys (`pt_live_...`, `pt_test_...`) are pre-hashed with SHA-256 and compared using `crypto.timingSafeEqual` to prevent side-channel timing attacks.
+- **Per-IP Demo Sandbox Sub-Limits**: Requests on public staging (`pharmatree.vercel.app`) without an `X-Tenant-Key` resolve to `demo-public-sandbox` partitioned by `(tenant_id, client_ip)`. A single user cannot exhaust the shared quota and starve recruiters.
+- **Vendor Custody Whitelist**: Enforces that the dispensing vendor address belongs to the tenant's authorized account whitelist (`isVendorAllowedForTenant`).
+- **Durable Neon Persistence**: Tenant records and quotas are stored in PostgreSQL tables `tenants` and `tenant_daily_quotas` (`ON CONFLICT DO UPDATE`), surviving serverless cold-starts.
+
+### 13.7 Anti-Replay Nonce Verification on Lockout Resets (`/api/pos/seal/reset`)
+- Administrative unlock challenges bind: `unitId`, explicit action `RESET_SEAL`, single-use `nonce`, and `timestamp`.
+- Nonces are recorded and atomically consumed via Neon table `used_reset_nonces` (`ON CONFLICT DO NOTHING RETURNING nonce`), preventing signature reuse within the 10-minute window.
 
 ## 14. Threat Model & System Boundaries (What Blockchain Doesn't Solve)
 
