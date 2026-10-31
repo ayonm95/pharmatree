@@ -4,7 +4,7 @@
 [![PharmaTree CI](https://github.com/ayonm95/pharmatree/actions/workflows/ci.yml/badge.svg)](https://github.com/ayonm95/pharmatree/actions/workflows/ci.yml)
 [![Live Demo](https://img.shields.io/badge/Demo-Vercel%20Live-black?logo=vercel)](https://pharmatree.vercel.app)
 [![Solidity](https://img.shields.io/badge/Solidity-0.8.20-blue?logo=solidity)](https://soliditylang.org/)
-[![Ethereum](https://img.shields.io/badge/Ethereum-Sepolia%20Testnet-627EEA?logo=ethereum)](https://sepolia.etherscan.io/address/0x7c40b82B39346A56Ba69df52A37eBBDfF541b198)
+[![Ethereum](https://img.shields.io/badge/Ethereum-Sepolia%20Testnet-627EEA?logo=ethereum)](https://sepolia.etherscan.io/address/0xbD245c7f7C8bF4A8Ec016e8C370D3e6931BeAd72)
 [![Next.js](https://img.shields.io/badge/Next.js-16.4.3-black?logo=next.js)](https://nextjs.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
 
@@ -75,9 +75,10 @@ flowchart TD
 | :--- | :--- |
 | **Network** | Ethereum Sepolia Testnet |
 | **Chain ID** | `11155111` |
-| **Contract Address** | [`0x7c40b82B39346A56Ba69df52A37eBBDfF541b198`](https://sepolia.etherscan.io/address/0x7c40b82B39346A56Ba69df52A37eBBDfF541b198) |
-| **Deployment Block** | `11995000` |
-| **Solidity Compiler** | `v0.8.20+commit.a1b79de6` |
+| **PharmaTree Contract** | [`0xbD245c7f7C8bF4A8Ec016e8C370D3e6931BeAd72`](https://sepolia.etherscan.io/address/0xbD245c7f7C8bF4A8Ec016e8C370D3e6931BeAd72) |
+| **ERC-2771 Forwarder** | [`0x2d24b5b481d0981AE7904790e9d8BF4c162b6c8c`](https://sepolia.etherscan.io/address/0x2d24b5b481d0981AE7904790e9d8BF4c162b6c8c) |
+| **Deployment Block** | `12032098` |
+| **Solidity Compiler** | `v0.8.24+commit.e11b9ed9` |
 
 ### Default Test Wallets
 
@@ -157,7 +158,7 @@ When an authorized handler scans an inbound shipment with their connected Web3 w
 .
 ├── backend/                  # Smart contract development & Hardhat environment
 │   ├── contracts/            # Solidity smart contracts (PharmaTree.sol, PharmaTreeForwarder.sol)
-│   ├── test/                 # Chai/Mocha smart contract unit test suite (64 automated tests)
+│   ├── test/                 # Chai/Mocha smart contract unit test suite (65 automated tests)
 │   ├── scripts/              # Deployment, role granting & verification scripts
 │   │   └── e2e-sepolia-validation.ts # Live Sepolia invariant audit suite (8/8 Invariants Passing)
 │   └── hardhat.config.ts     # Hardhat network & compiler configuration
@@ -208,15 +209,17 @@ SEPOLIA_PRIVATE_KEY_MANUFACTURER=0x...
 SEPOLIA_PRIVATE_KEY_DISTRIBUTOR=0x...
 SEPOLIA_CHAIN_ID=11155111
 ETHERSCAN_API_KEY=<YOUR_ETHERSCAN_KEY>
-SEPOLIA_CONTRACT_ADDRESS=0x7c40b82B39346A56Ba69df52A37eBBDfF541b198
+SEPOLIA_CONTRACT_ADDRESS=0xbD245c7f7C8bF4A8Ec016e8C370D3e6931BeAd72
+TRUSTED_FORWARDER=0x2d24b5b481d0981AE7904790e9d8BF4c162b6c8c
 ```
 
 **`frontend/.env.local`**:
 ```env
-NEXT_PUBLIC_PHARMA_TREE_CONTRACT=0x7c40b82B39346A56Ba69df52A37eBBDfF541b198
+NEXT_PUBLIC_PHARMA_TREE_CONTRACT=0xbD245c7f7C8bF4A8Ec016e8C370D3e6931BeAd72
+NEXT_PUBLIC_TRUSTED_FORWARDER=0x2d24b5b481d0981AE7904790e9d8BF4c162b6c8c
 NEXT_PUBLIC_RPC_URL=https://ethereum-sepolia-rpc.publicnode.com
 NEXT_PUBLIC_CHAIN_ID=11155111
-NEXT_PUBLIC_DEPLOYMENT_BLOCK=11995000
+NEXT_PUBLIC_DEPLOYMENT_BLOCK=12032098
 RELAYER_PRIVATE_KEY=0x...
 ```
 
@@ -266,8 +269,10 @@ A blockchain is a deterministic ledger of recorded events, not a physical spectr
 | **Inventory Diversion & Theft** | Stolen shipment redirected to black-market pharmacy | **Tier 3 Custody Handshake**: Verifies dispenser matches on-chain `currentOwner`. Handshakes require explicit recipient `acceptTransfer`. | Physical theft occurring after legitimate pharmacy dispensing. |
 | **Damaged / Recalled Batch Dispensing** | Sub-potent or temperature-compromised shipment dispensed to patient | **Tier 4 Transit Integrity**: Explicit receiver rejection transitions unit to `Status.Rejected`, preventing sale until audit clearance. | Undetected cold-chain breaks where no handler records transit rejection. |
 | **Scratch Seal Brute-Force DoS** | Attacker repeatedly submits bad guesses to lock genuine pharmacy seals | **Client-Partitioned Exponential Backoff**: Failed attempts partitioned by `(unitId, clientIpHash)`. Attacker locked out after 3–5 attempts; legitimate pharmacy is unaffected. | Attacker cycling rotating proxies; mitigated by $32^{12} \approx 1.15 \times 10^{18}$ Crockford Base32 entropy. |
-| **Gasless Relayer Exploitation** | Malicious client drains relayer gas balance through public sell endpoints | **Authenticated Forwarder & Gas Quotas**: EIP-712 / EIP-191 signer must match `currentOwner`. Max 50 tx/day per vendor; automatic 503 cutoff below 0.001 ETH balance. | Mempool congestion spikes; mitigated by multi-provider fallback RPC and retry backoff. |
+| **Gasless Relayer Exploitation** | Malicious client drains relayer gas balance through public sell endpoints | **Authenticated Forwarder & Gas Quotas**: EIP-712 forward request signer must match `currentOwner`. Max 50 tx/day per vendor; automatic 503 cutoff below 0.001 ETH balance. | Mempool congestion spikes; mitigated by multi-provider fallback RPC and retry backoff. |
+| **Relayer Liveness & Solvency DoS** | Relayer runs out of native ETH or relayer API crashes | **Censorship-Resistant Direct Fallback**: POS automatically triggers direct dispensary signing (`requiresClientSigning: true`) via injected browser wallet (MetaMask). | **Explicit Trust Assumption**: Relayer liveness is an off-chain UX optimization for gasless dispensing, not an availability dependency. The smart contract remains fully self-executable. |
 | **Server / Relayer Compromise** | Attacker compromises backend server hosting `RELAYER_PRIVATE_KEY` | **Role Decoupling (ERC-2771)**: Relayer EOA holds ZERO roles in `PharmaTree.sol`. Attacker cannot mint units, grant roles, or sell unowned inventory without vendor signatures. | Attacker draining native Sepolia ETH from the relayer wallet. |
+| **Server-Held HMAC Key Leak (`SEAL_PEPPER`)** | Attacker extracts server environment variables | **Versioned Cryptographic Verifiers**: Seal verifiers are stored as one-way HMACs with version prefixes (`v1:`). Plaintext secrets are never stored in DB. | **Explicit Trust Assumption**: Confidentiality of `SEAL_PEPPER` relies on secure server secrets management. Key rotation (`v2:`) and KMS hardware isolation limit blast radius. |
 | **"Garbage In, Garbage Out"** | Corrupt manufacturer mints batches with falsified active ingredients | **Out of Scope (Physical Reality Gap)**: Blockchain ledger accurately records fraudulent genesis. Regulatory GMP audits and physical lab inspections required. | Physical chemical composition cannot be deduced from digital cryptography alone. |
 
 ---
@@ -314,24 +319,34 @@ To balance security rigor with retail dispensary throughput, PharmaTree defines 
 
 ---
 
-## 🧪 Comprehensive Test Suite (64 Automated Tests Passing)
+## 🧪 Comprehensive Test Suite (81 Automated Tests Passing)
 
-The monorepo features 64 passing automated tests and **93.59% Solidity statement coverage** across 5 test suites:
+The monorepo features **81 passing automated tests** (65 Hardhat contract & invariant tests + 16 Vitest frontend API security tests) and **93.59% Solidity statement coverage** across 8 test suites:
 
 ```bash
 # Run all smart contract, invariant, and cryptographic seal tests
 npm test
 
-# Run tests and validate frontend Next.js production build
+# Run all frontend API, rate-limiting, and client-lockout Vitest suites
+npm run test:frontend
+
+# Run full test suite and validate Next.js production build
 npm run test:all
 ```
 
 ### Test Suite Breakdown:
+
+#### Smart Contracts & On-Chain Invariants (Hardhat - 65 tests)
 - **`PharmaTree.test.ts` (25 tests)**: Role-based access control, hierarchical unit creation, two-party custody handshakes, explicit receiver rejection flows, remainder quantity conservation, and retail dispensing.
 - **`PosInvariants.test.ts` (15 tests)**: All 8 operational supply-chain invariants, pure 5-tier evaluation engine, replay/diversion detection, and randomized property test verifying $\sum Q$ mass conservation.
 - **`Gs1AndSeals.test.ts` (16 tests)**: GTIN-14 Luhn check digit, GS1 Digital Link URI builder/parser, element strings with ASCII `\x1d` separators, 2D DataMatrix SVG generation, Crockford Base32 normalization, Scheme 0/1 seals, client-scoped anti-DoS lockout, exponential backoff, and versioned HMAC keys (`v1:`).
-- **`Eip712Forwarder.test.ts` (6 tests)**: Trusted forwarder address recording, unprivileged relayer role isolation (zero roles), direct owner execution fallback, valid EIP-712 meta-transaction execution via `ERC2771Forwarder`, and forged signature rejection.
-- **`AtomicSellRace.test.ts` (2 tests)**: Concurrent checkout race conditions (first terminal succeeds, second atomically reverts with `Unit is not active`), and fractional inventory split conservation.
+- **`Eip712Forwarder.test.ts` (7 tests)**: Trusted forwarder address recording, unprivileged relayer role isolation (zero roles), direct owner execution fallback, valid EIP-712 meta-transaction execution via `ERC2771Forwarder`, forged signature rejection, and non-forwarder calldata sender spoofing prevention.
+- **`AtomicSellRace.test.ts` (2 tests)**: Concurrent checkout race conditions evaluated under disabled automine (`evm_setAutomine(false)` and `evm_mine`), verifying that the first transaction atomically mines while the concurrent one reverts with `Unit is not active`, and fractional inventory split conservation.
+
+#### Frontend APIs & Off-Chain Security (Vitest - 16 tests)
+- **`sealVerifier.test.ts` (7 tests)**: Crockford Base32 character normalization, 12-char high-entropy secret generation, constant-time `timingSafeEqual` comparison, versioned HMAC verifiers (`v1:`), exponential backoff timing curves, client IP isolation under DoS attacks, and authorized manufacturer/admin lockout reset.
+- **`rateLimit.test.ts` (7 tests)**: Resilient client IP extraction from trusted platform headers (`x-vercel-forwarded-for`, `x-real-ip`, `cf-connecting-ip`), SHA-256 HMAC client IP hashing with server pepper, and vendor daily gasless transaction quotas (50 tx/day limit with atomic quota decrements).
+- **`posSellApi.test.ts` (2 tests)**: Gasless relayer balance circuit breaker (< 0.001 ETH hard cutoff returning HTTP 503), and strict requirement for EIP-712 forward requests for third-party dispensary units.
 
 ```text
 --------------------------|----------|----------|----------|----------|----------------|

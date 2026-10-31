@@ -13,7 +13,7 @@ async function main() {
   console.log("         PHARMATREE E2E SEPOLIA INVARIANT VALIDATION SUITE            ");
   console.log("======================================================================");
 
-  const contractAddress = process.env.SEPOLIA_CONTRACT_ADDRESS || "0x7c40b82B39346A56Ba69df52A37eBBDfF541b198";
+  const contractAddress = process.env.SEPOLIA_CONTRACT_ADDRESS || "0xbD245c7f7C8bF4A8Ec016e8C370D3e6931BeAd72";
   const [relayerSigner] = await ethers.getSigners();
   const provider = ethers.provider;
 

@@ -199,6 +199,21 @@ export async function initDbSchema(): Promise<void> {
         value VARCHAR(256) NOT NULL,
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
       );
+
+      CREATE TABLE IF NOT EXISTS client_seal_locks (
+        lock_key VARCHAR(128) PRIMARY KEY,
+        failed_attempts INTEGER NOT NULL DEFAULT 1,
+        locked_until TIMESTAMP WITH TIME ZONE,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS vendor_daily_quotas (
+        quota_key VARCHAR(128) PRIMARY KEY,
+        vendor_address VARCHAR(42) NOT NULL,
+        tx_count INTEGER NOT NULL DEFAULT 1,
+        day_date DATE NOT NULL DEFAULT CURRENT_DATE,
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
     `);
     schemaInitialized = true;
   } catch (err) {
@@ -207,11 +222,11 @@ export async function initDbSchema(): Promise<void> {
 }
 
 /**
- * Hash client IP with a daily/server salt to protect user privacy
+ * Hash client IP with an HMAC server secret to protect user privacy
  */
 export function hashClientIp(ip: string): string {
-  const salt = process.env.SEAL_PEPPER || "pharmatree-client-salt-v1";
-  return crypto.createHash("sha256").update(`${ip}:${salt}`).digest("hex").slice(0, 16);
+  const secret = process.env.CLIENT_IP_SECRET || process.env.SEAL_PEPPER || "pharmatree-client-salt-v1";
+  return crypto.createHmac("sha256", secret).update(ip).digest("hex").slice(0, 32);
 }
 
 /**
@@ -904,6 +919,7 @@ export async function upsertSealRecord(record: DbSealRecord): Promise<void> {
 }
 
 const inMemoryClientLocks: Record<string, { failedAttempts: number; lockedUntil?: string | null }> = {};
+const inMemoryVendorDailyQuotas: Record<string, number> = {};
 
 export function calculateSealBackoffMs(attempts: number): number {
   if (attempts < 3) return 0;
@@ -913,7 +929,7 @@ export function calculateSealBackoffMs(attempts: number): number {
 }
 
 /**
- * Check if a client or unit is currently locked out
+ * Check if a client or unit is currently locked out (Durable Postgres + In-memory fallback)
  */
 export async function getClientSealLock(
   unitId: string,
@@ -921,6 +937,27 @@ export async function getClientSealLock(
 ): Promise<{ locked: boolean; failedAttempts: number; lockedUntil?: string }> {
   if (clientIdentifier) {
     const key = `${unitId}:${clientIdentifier}`;
+
+    if (neonPool) {
+      await initDbSchema();
+      try {
+        const res = await neonPool.query(
+          `SELECT failed_attempts, locked_until::TEXT FROM client_seal_locks WHERE lock_key = $1;`,
+          [key]
+        );
+        if (res.rows.length > 0) {
+          const row = res.rows[0];
+          const lockedUntil = row.locked_until;
+          if (lockedUntil && Date.now() < new Date(lockedUntil).getTime()) {
+            return { locked: true, failedAttempts: Number(row.failed_attempts), lockedUntil };
+          }
+          return { locked: false, failedAttempts: Number(row.failed_attempts) };
+        }
+      } catch (err) {
+        console.warn("[Database] Postgres getClientSealLock failed, using memory:", err);
+      }
+    }
+
     const rec = inMemoryClientLocks[key];
     if (rec && rec.lockedUntil) {
       const lockExpiry = new Date(rec.lockedUntil).getTime();
@@ -950,6 +987,37 @@ export async function recordFailedSealAttempt(
 ): Promise<{ locked: boolean; failedAttempts: number; lockedUntil?: string }> {
   if (clientIdentifier) {
     const key = `${unitId}:${clientIdentifier}`;
+
+    if (neonPool) {
+      await initDbSchema();
+      try {
+        const cur = await neonPool.query(
+          `SELECT failed_attempts FROM client_seal_locks WHERE lock_key = $1;`,
+          [key]
+        );
+        const prevAttempts = cur.rows.length > 0 ? Number(cur.rows[0].failed_attempts) : 0;
+        const newAttempts = prevAttempts + 1;
+        const backoffMs = calculateSealBackoffMs(newAttempts);
+        const locked = backoffMs > 0;
+        const lockedUntil = locked ? new Date(Date.now() + backoffMs).toISOString() : null;
+
+        await neonPool.query(
+          `INSERT INTO client_seal_locks (lock_key, failed_attempts, locked_until, updated_at)
+           VALUES ($1, $2, $3::TIMESTAMP WITH TIME ZONE, NOW())
+           ON CONFLICT (lock_key) DO UPDATE SET
+             failed_attempts = $2,
+             locked_until = $3::TIMESTAMP WITH TIME ZONE,
+             updated_at = NOW();`,
+          [key, newAttempts, lockedUntil]
+        );
+
+        inMemoryClientLocks[key] = { failedAttempts: newAttempts, lockedUntil };
+        return { locked, failedAttempts: newAttempts, lockedUntil: lockedUntil || undefined };
+      } catch (err) {
+        console.warn("[Database] Postgres recordFailedSealAttempt failed, using memory:", err);
+      }
+    }
+
     const prev = inMemoryClientLocks[key] || { failedAttempts: 0 };
     const newAttempts = prev.failedAttempts + 1;
     const backoffMs = calculateSealBackoffMs(newAttempts);
@@ -1022,6 +1090,19 @@ export async function markSealVerified(unitId: string): Promise<void> {
  * Reset seal lockout (authorized manufacturer or admin action)
  */
 export async function resetSealLockDb(unitId: string, clientIdentifier?: string): Promise<void> {
+  if (neonPool) {
+    await initDbSchema();
+    try {
+      if (clientIdentifier) {
+        await neonPool.query(`DELETE FROM client_seal_locks WHERE lock_key = $1;`, [`${unitId}:${clientIdentifier}`]);
+      } else {
+        await neonPool.query(`DELETE FROM client_seal_locks WHERE lock_key LIKE $1;`, [`${unitId}:%`]);
+      }
+    } catch (err) {
+      console.warn("[Database] Postgres resetSealLockDb failed, using memory:", err);
+    }
+  }
+
   if (clientIdentifier) {
     delete inMemoryClientLocks[`${unitId}:${clientIdentifier}`];
   } else {
@@ -1041,4 +1122,47 @@ export async function resetSealLockDb(unitId: string, clientIdentifier?: string)
       lockedUntil: null,
     });
   }
+}
+
+/**
+ * Checks and increments the daily transaction/gas quota for an authenticated vendor wallet
+ * Supported by Neon PostgreSQL table `vendor_daily_quotas` with atomic ON CONFLICT DO UPDATE
+ */
+export async function checkAndIncrementVendorQuotaDb(
+  vendorAddress: string,
+  limit = 50
+): Promise<{ allowed: boolean; count: number; remaining: number }> {
+  const cleanVendor = vendorAddress.toLowerCase();
+  const dayKey = `vendor-daily:${cleanVendor}:${new Date().toISOString().slice(0, 10)}`;
+
+  if (neonPool) {
+    await initDbSchema();
+    try {
+      const res = await neonPool.query(
+        `INSERT INTO vendor_daily_quotas (quota_key, vendor_address, tx_count, day_date, updated_at)
+         VALUES ($1, $2, 1, CURRENT_DATE, NOW())
+         ON CONFLICT (quota_key) DO UPDATE SET
+           tx_count = vendor_daily_quotas.tx_count + 1,
+           updated_at = NOW()
+         RETURNING tx_count;`,
+        [dayKey, cleanVendor]
+      );
+      const count = Number(res.rows[0].tx_count);
+      return {
+        allowed: count <= limit,
+        count,
+        remaining: Math.max(0, limit - count),
+      };
+    } catch (err) {
+      console.warn("[Database] Postgres checkAndIncrementVendorQuotaDb failed, falling back:", err);
+    }
+  }
+
+  const count = (inMemoryVendorDailyQuotas[dayKey] || 0) + 1;
+  inMemoryVendorDailyQuotas[dayKey] = count;
+  return {
+    allowed: count <= limit,
+    count,
+    remaining: Math.max(0, limit - count),
+  };
 }

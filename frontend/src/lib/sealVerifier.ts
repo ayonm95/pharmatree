@@ -6,8 +6,11 @@ import {
   markSealVerified,
   resetSealLockDb,
   upsertSealRecord,
+  calculateSealBackoffMs,
   DbSealRecord,
 } from "./db";
+
+export { calculateSealBackoffMs };
 
 const CROCKFORD_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 const SEAL_PEPPER = process.env.SEAL_PEPPER || "pharmatree-tamper-seal-pepper-sepolia-v1";
@@ -42,6 +45,8 @@ export function normalizeCrockfordSecret(raw: string): string {
     .replace(/O/g, "0");
 }
 
+export const normalizeCrockfordBase32 = normalizeCrockfordSecret;
+
 /**
  * Generates a high-entropy 12-character Crockford Base32 secret
  * Entropy: 32^12 ≈ 1.15 × 10^18 possibilities
@@ -69,6 +74,29 @@ export function computeSealVerifier(
     .update(`${unitId}:${normalized}`)
     .digest("hex");
   return version ? `${version}:${hmac}` : hmac;
+}
+
+export const computeCrockfordVerifier = (secret: string, unitId: string | number, version = "v1") =>
+  computeSealVerifier(unitId, secret, version);
+
+/**
+ * Verifies a secret against a stored verifier in constant time using timingSafeEqual
+ */
+export function verifyCrockfordCode(secret: string, verifier: string, unitId: string | number): boolean {
+  let expectedHex = verifier;
+  let version = "v1";
+  if (expectedHex.includes(":")) {
+    const parts = expectedHex.split(":");
+    version = parts[0];
+    expectedHex = parts[1];
+  }
+  const computedFull = computeSealVerifier(unitId, secret, version);
+  const computedHex = computedFull.includes(":") ? computedFull.split(":")[1] : computedFull;
+
+  return (
+    expectedHex.length === computedHex.length &&
+    crypto.timingSafeEqual(Buffer.from(computedHex, "hex"), Buffer.from(expectedHex, "hex"))
+  );
 }
 
 /**

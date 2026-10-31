@@ -1,0 +1,13 @@
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Global allowlist for example env files and test fixtures"
+paths = [
+  '''^\.env\.example$''',
+  '''^backend/\.env\.example$''',
+  '''^frontend/\.env\.example$''',
+  '''^backend/test/.*''',
+  '''^frontend/test/.*''',
+  '''^README\.md$'''
+]

@@ -226,4 +226,23 @@ describe("EIP-712 Meta-Transactions & ERC-2771 Forwarder (Phase 5 & Relayer Deco
       forwarder.connect(relayer).execute(badRequest)
     ).to.be.revertedWithCustomError(forwarder, "ERC2771ForwarderInvalidSigner");
   });
+
+  it("Should prevent an attacker from spoofing sender by directly calling PharmaTree with appended address", async function () {
+    const { pharmaTreeAddress, pharmacy, attacker, unitId, pharmaTree } =
+      await loadFixture(deployWithForwarderFixture);
+
+    // Attacker crafts raw calldata for markAsSold(unitId) and appends 20-byte pharmacy address
+    const calldata = pharmaTree.interface.encodeFunctionData("markAsSold", [unitId]);
+    const spoofedCalldata = ethers.concat([calldata, pharmacy.address]);
+
+    // Attacker calls contract directly trying to trick _msgSender()
+    // Because attacker is NOT the trusted forwarder, ERC2771Context ignores the appended bytes
+    // and evaluates _msgSender() as attacker.address -> reverts with "Not the current owner"
+    await expect(
+      attacker.sendTransaction({
+        to: pharmaTreeAddress,
+        data: spoofedCalldata,
+      })
+    ).to.be.revertedWith("Not the current owner");
+  });
 });

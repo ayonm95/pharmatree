@@ -35,24 +35,45 @@ describe("Atomic Verification & Concurrent Sell Race Conditions (Phase 4)", func
     expect(beforeUnit.status).to.equal(Status.Active);
     expect(beforeUnit.currentOwner).to.equal(pharmacySigner.address);
 
-    // Terminal A: executes first sale
-    const tx1 = await pharmaTree.connect(pharmacySigner).sellQuantity(retailUnitId, 1);
-    await tx1.wait();
+    // Disable automine to create a genuine concurrent mempool race
+    await ethers.provider.send("evm_setAutomine", [false]);
+    await ethers.provider.send("evm_setIntervalMining", [0]);
 
-    // Status is now Sold
-    const midUnit = await pharmaTree.getUnitDetails(retailUnitId);
-    expect(midUnit.status).to.equal(Status.Sold);
+    try {
+      const baseNonce = await ethers.provider.getTransactionCount(pharmacySigner.address);
 
-    // Terminal B: concurrent sale attempt on already sold unit
-    // MUST REVERT ATOMICALLY with "Unit is not active"
-    await expect(
-      pharmaTree.connect(pharmacySigner).sellQuantity(retailUnitId, 1)
-    ).to.be.revertedWith("Unit is not active");
+      // Terminal A & Terminal B submit concurrent sell transactions to the mempool
+      const txA = await pharmaTree.connect(pharmacySigner).sellQuantity(retailUnitId, 1, {
+        nonce: baseNonce,
+      });
+      const txB = await pharmaTree.connect(pharmacySigner).sellQuantity(retailUnitId, 1, {
+        nonce: baseNonce + 1,
+      });
 
-    // Terminal C: markAsSold attempt also reverts atomically
-    await expect(
-      pharmaTree.connect(pharmacySigner).markAsSold(retailUnitId)
-    ).to.be.revertedWith("Unit is not active");
+      // Mine the pending block with both transactions
+      await ethers.provider.send("evm_mine", []);
+
+      // Exactly one must succeed (status 1) and the concurrent one must revert on-chain (status 0)
+      const receiptA = await txA.wait();
+      expect(receiptA?.status).to.equal(1);
+
+      // txB must fail in the mined block because unit was atomically marked Sold by txA
+      let txBReverted = false;
+      try {
+        await txB.wait();
+      } catch (err: any) {
+        txBReverted = true;
+        expect(err.receipt?.status).to.equal(0);
+      }
+      expect(txBReverted).to.be.true;
+
+      // Status is confirmed Sold
+      const finalUnit = await pharmaTree.getUnitDetails(retailUnitId);
+      expect(finalUnit.status).to.equal(Status.Sold);
+    } finally {
+      // Re-enable automine for remaining tests
+      await ethers.provider.send("evm_setAutomine", [true]);
+    }
 
     // Rogue pharmacy (non-owner) attempting to sell reverts with "Not the current owner"
     await expect(

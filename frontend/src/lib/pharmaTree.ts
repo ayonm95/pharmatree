@@ -27,7 +27,8 @@ export const PHARMA_TREE_ABI = [
   "event UnitReclaimed(uint256 indexed id, address indexed reclaimedBy)",
   "event UnitSold(uint256 indexed id, address indexed soldBy)"
 ] as const;
-export const PHARMA_TREE_CONTRACT = process.env.NEXT_PUBLIC_PHARMA_TREE_CONTRACT || "0x7c40b82B39346A56Ba69df52A37eBBDfF541b198";
+export const PHARMA_TREE_CONTRACT =
+  process.env.NEXT_PUBLIC_PHARMA_TREE_CONTRACT || "0xbD245c7f7C8bF4A8Ec016e8C370D3e6931BeAd72";
 export const PHARMA_TREE_CHAIN_ID = BigInt(process.env.NEXT_PUBLIC_CHAIN_ID || "11155111");
 
 export const PHARMA_TREE_FORWARDER_ABI = [
@@ -40,7 +41,7 @@ export const PHARMA_TREE_FORWARDER_ABI = [
 export const PHARMA_TREE_FORWARDER_CONTRACT =
   process.env.NEXT_PUBLIC_TRUSTED_FORWARDER ||
   process.env.TRUSTED_FORWARDER ||
-  "";
+  "0x2d24b5b481d0981AE7904790e9d8BF4c162b6c8c";
 
 export const UNIT_LEVELS = [
   "Container",

@@ -71,6 +71,62 @@ async function main() {
     }
   }
 
+  // Seed demo units for POS and Invariant testing
+  const unitCount = await contract.unitCounter();
+  if (unitCount === BigInt(0)) {
+    console.log("Seeding Sepolia demo units for 5-tier verification suite...");
+
+    // Unit #1: Genesis item (Paracetamol 500mg, active in stock)
+    const tx1 = await contract.createRootUnit(4, "Paracetamol 500mg, 50 tablets", 50);
+    await tx1.wait(1);
+    console.log("✅ Seeded Unit #1 (Paracetamol 500mg, Active)");
+
+    // Unit #2: Sold item (Amoxicillin 250mg, marked sold to demonstrate anti-replay)
+    const tx2 = await contract.createRootUnit(4, "Amoxicillin 250mg, 10 capsules", 10);
+    await tx2.wait(1);
+    const tx2Sold = await contract.markAsSold(2);
+    await tx2Sold.wait(1);
+    console.log("✅ Seeded Unit #2 (Amoxicillin 250mg, Sold / Anti-Replay)");
+
+    // Units #3-#6: Pallet -> Case -> Box -> Pack
+    const tx3 = await contract.createRootUnit(0, "Demo Pallet Alpha", 1);
+    await tx3.wait(1);
+    const tx4 = await contract.createRootUnit(1, "Demo Case 01", 1);
+    await tx4.wait(1);
+    const tx5 = await contract.createRootUnit(2, "Demo Box 01", 1);
+    await tx5.wait(1);
+    const tx6 = await contract.createRootUnit(3, "Demo Blister Pack 01", 1);
+    await tx6.wait(1);
+    console.log("✅ Seeded Units #3-#6 (Hierarchy Pallet/Case/Box/Pack)");
+
+    // Unit #7: Bulk item (Azithromycin 500mg, 100 units for fractional dispensing demo)
+    const tx7 = await contract.createRootUnit(4, "Azithromycin 500mg, 100 units", 100);
+    await tx7.wait(1);
+    console.log("✅ Seeded Unit #7 (Azithromycin 500mg, 100 units Fractional)");
+
+    // Unit #8: Transferred to dispensary wallet 0xe88a5608b536bcc9d557823234baca9a00f2540b
+    const pharmacyAddr = "0xe88a5608B536BCc9d557823234BacA9a00F2540B";
+    const tx8 = await contract.createRootUnit(4, "Ibuprofen 400mg, 20 packs", 20);
+    await tx8.wait(1);
+    const tx8Transfer = await contract.initiateTransfer(8, pharmacyAddr);
+    await tx8Transfer.wait(1);
+
+    const distKey = process.env.SEPOLIA_PRIVATE_KEY_DISTRIBUTOR?.trim();
+    if (distKey) {
+      try {
+        const distWallet = new ethers.Wallet(distKey, ethers.provider);
+        const distContract = contract.connect(distWallet) as any;
+        const tx8Accept = await distContract.acceptTransfer(8);
+        await tx8Accept.wait(1);
+        console.log(`✅ Seeded Unit #8 (Transferred & Accepted by dispensary ${pharmacyAddr})`);
+      } catch (err: any) {
+        console.warn(`Could not auto-accept transfer on unit 8: ${err.message}`);
+      }
+    } else {
+      console.log(`✅ Seeded Unit #8 (Initiated transfer to ${pharmacyAddr})`);
+    }
+  }
+
   const envPaths = [
     path.resolve(__dirname, "../.env"),
     path.resolve(__dirname, "../../frontend/.env.local"),
@@ -79,12 +135,14 @@ async function main() {
   for (const envPath of envPaths) {
     if (envPath.endsWith(".env.local")) {
       await replaceEnvValue(envPath, "NEXT_PUBLIC_PHARMA_TREE_CONTRACT", contractAddress);
+      await replaceEnvValue(envPath, "NEXT_PUBLIC_TRUSTED_FORWARDER", forwarderAddress);
       if (deploymentReceipt?.blockNumber !== undefined) {
         await replaceEnvValue(envPath, "NEXT_PUBLIC_DEPLOYMENT_BLOCK", String(deploymentReceipt.blockNumber));
       }
       await replaceEnvValue(envPath, "NEXT_PUBLIC_CHAIN_ID", "11155111");
     } else {
       await replaceEnvValue(envPath, "SEPOLIA_CONTRACT_ADDRESS", contractAddress);
+      await replaceEnvValue(envPath, "TRUSTED_FORWARDER", forwarderAddress);
       await replaceEnvValue(envPath, "SEPOLIA_CHAIN_ID", "11155111");
     }
   }

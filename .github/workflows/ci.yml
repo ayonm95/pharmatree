@@ -7,10 +7,23 @@ on:
     branches: [main, master]
 
 jobs:
-  test-contracts:
-    name: Smart Contract Tests
+  secrets-audit:
+    name: Gitleaks Secrets Scanning
     runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
+      - name: Run Gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  test-contracts:
+    name: Smart Contract & Invariant Tests
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -30,14 +43,13 @@ jobs:
         working-directory: ./backend
         run: npx hardhat compile
 
-      - name: Run Hardhat unit tests
+      - name: Run Hardhat test suite (65 tests)
         working-directory: ./backend
         run: npx hardhat test
 
-  build-frontend:
-    name: Frontend Build & Typecheck
+  test-frontend:
+    name: Frontend Lint, Tests & Production Build
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -53,11 +65,20 @@ jobs:
         working-directory: ./frontend
         run: npm ci
 
+      - name: Run ESLint
+        working-directory: ./frontend
+        run: npm run lint
+
+      - name: Run Vitest API security tests (16 tests)
+        working-directory: ./frontend
+        run: npm test
+
       - name: Build Next.js application
         working-directory: ./frontend
         env:
-          NEXT_PUBLIC_PHARMA_TREE_CONTRACT: "0x36ea40cb4edc7e304DA1A280480afd16ABb124D0"
+          NEXT_PUBLIC_PHARMA_TREE_CONTRACT: "0xbD245c7f7C8bF4A8Ec016e8C370D3e6931BeAd72"
+          NEXT_PUBLIC_TRUSTED_FORWARDER: "0x2d24b5b481d0981AE7904790e9d8BF4c162b6c8c"
           NEXT_PUBLIC_RPC_URL: "https://ethereum-sepolia-rpc.publicnode.com"
           NEXT_PUBLIC_CHAIN_ID: "11155111"
-          NEXT_PUBLIC_DEPLOYMENT_BLOCK: "11671278"
+          NEXT_PUBLIC_DEPLOYMENT_BLOCK: "12032098"
         run: npm run build

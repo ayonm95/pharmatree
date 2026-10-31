@@ -14,7 +14,8 @@
     "compile": "npm --prefix backend run compile",
     "test": "npm --prefix backend test",
     "test:backend": "npm --prefix backend test",
-    "test:all": "npm --prefix backend test && npm run build --workspace=frontend",
+    "test:frontend": "npm test --workspace=frontend",
+    "test:all": "npm --prefix backend test && npm test --workspace=frontend && npm run build --workspace=frontend",
     "deploy:sepolia": "npm --prefix backend run deploy:sepolia"
   },
   "keywords": [

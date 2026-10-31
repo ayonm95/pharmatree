@@ -63,7 +63,7 @@ flowchart LR
     UI -->|Resilient Fallback Reads| RPC[Multi-Endpoint RPC Pool]
     UI -->|Signed Transactions| MM
     MM -->|Submit Tx| RPC
-    RPC --> C["PharmaTree.sol (0x7c40...198)"]
+    RPC --> C["PharmaTree.sol (0xbD24...d72)"]
     C --> S[On-chain Unit State & Partitions]
     C --> E[Immutable Audit Events]
     UI --> H[Activity & Inventory Partitions]
@@ -80,7 +80,7 @@ flowchart TB
     Wallet --> Signer[MetaMask Signer]
     Wallet --> ABI[ABI & Enum Mappings]
     Wallet --> Metadata[Metadata Helper]
-    Provider --> Contract["PharmaTree.sol (0x7c40...198)"]
+    Provider --> Contract["PharmaTree.sol (0xbD24...d72)"]
     Signer --> Contract
     Contract --> Roles[Access Control Matrix]
     Contract --> Units[Lineage & Stock Partitions]
@@ -565,7 +565,7 @@ Protects against brute-force unit ID scanning and RPC node exhaustion:
 ### 13.4 Production Health Diagnostics Endpoint (`/api/health`)
 Provides live system telemetry for automated uptime monitoring (DataDog, Prometheus, AWS Route53):
 - **RPC Availability & Latency**: Tests connectivity to Sepolia nodes and reports millisecond round-trip time.
-- **Contract Operability**: Queries live unit count on `0x7c40b82B39346A56Ba69df52A37eBBDfF541b198`.
+- **Contract Operability**: Queries live unit count on `0xbD245c7f7C8bF4A8Ec016e8C370D3e6931BeAd72` (Forwarder: `0x2d24b5b481d0981AE7904790e9d8BF4c162b6c8c`).
 - **Relayer Solvency**: Checks gasless relayer balance (`0x6537...1537`), verifying it holds $>0.005$ ETH for transaction sponsorship without exposing private keys.
 - **Runtime Metrics**: Reports memory RSS, heap usage, and server uptime.
 

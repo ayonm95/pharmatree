@@ -14,6 +14,14 @@ import {
   parseSafePositiveInt,
 } from "@/lib/rateLimit";
 
+// In-process transaction queue for relayer to prevent nonce collisions under concurrent load
+let relayerQueuePromise = Promise.resolve<any>(undefined);
+function enqueueRelayerTx<T>(fn: () => Promise<T>): Promise<T> {
+  const result = relayerQueuePromise.then(fn, fn);
+  relayerQueuePromise = result.catch(() => {});
+  return result;
+}
+
 export async function POST(req: NextRequest) {
   // 1. Rate Limiting Protection (Max 30 state-changing dispense calls/minute per IP)
   const rateLimit = checkRateLimit(req, {
@@ -191,7 +199,7 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      const tx = await forwarder.execute(fwd);
+      const tx = await enqueueRelayerTx(() => forwarder.execute(fwd));
       const receipt = await tx.wait(1);
 
       return NextResponse.json(
@@ -211,62 +219,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // 6. Cryptographic Personal Sign Authentication (EIP-191 Auth)
-    if (body.authSignature && body.authTimestamp) {
-      const authAgeMs = Date.now() - Number(body.authTimestamp);
-      if (authAgeMs < -60000 || authAgeMs > 10 * 60 * 1000) {
-        return NextResponse.json(
-          {
-            success: false,
-            error: "EXPIRED_AUTH_SIGNATURE",
-            message: "Authorization signature has expired (validity window: 10 minutes).",
-          },
-          { status: 401, headers: rateHeaders }
-        );
-      }
-
-      const expectedMsg = `Authorize PharmaTree Dispense: Unit #${unitId} Qty: ${dispenseQty} Nonce: ${body.authTimestamp}`;
-      let recovered = "";
-      try {
-        recovered = ethers.verifyMessage(expectedMsg, body.authSignature).toLowerCase();
-      } catch {
-        return NextResponse.json(
-          {
-            success: false,
-            error: "MALFORMED_SIGNATURE",
-            message: "Failed to decode cryptographic authorization signature.",
-          },
-          { status: 400, headers: rateHeaders }
-        );
-      }
-
-      if (recovered !== targetVendor) {
-        return NextResponse.json(
-          {
-            success: false,
-            error: "FORBIDDEN_SIGNER",
-            message: `Signer ${recovered} does not match current registered owner ${currentOwner}.`,
-          },
-          { status: 403, headers: rateHeaders }
-        );
-      }
-
-      // Check daily quota
-      const quota = await checkVendorDailyQuota(targetVendor, 50);
-      if (!quota.allowed) {
-        return NextResponse.json(
-          {
-            success: false,
-            error: "VENDOR_DAILY_QUOTA_EXCEEDED",
-            message: `Daily gasless transaction quota exceeded for ${currentOwner} (50 tx/day).`,
-          },
-          { status: 429, headers: rateHeaders }
-        );
-      }
-    }
-
-    // 7. Check if Relayer is directly authorized
-    if (currentOwner.toLowerCase() !== relayerWallet.address.toLowerCase() && !body.forwardRequest && !body.authSignature) {
+    // 6. Direct Relayer Execution (Self-Owned Units Only)
+    // Since the relayer holds zero roles, third-party sales MUST use EIP-712 forwardRequest
+    if (currentOwner.toLowerCase() !== relayerWallet.address.toLowerCase()) {
       return NextResponse.json(
         {
           success: false,
@@ -279,21 +234,21 @@ export async function POST(req: NextRequest) {
             quantity: dispenseQty,
             nonce: Date.now(),
           },
-          message: `Unit is registered to owner ${currentOwner}, but the gasless relayer operates as ${relayerWallet.address}. Please confirm transaction with your dispensary wallet signature.`,
+          message: `Unit #${unitId} is owned by ${currentOwner}. Since the relayer holds zero contract roles, state-changing sales require a signed EIP-712 forward request through ${PHARMA_TREE_FORWARDER_CONTRACT || "forwarder"} or direct wallet transaction.`,
         },
         { headers: rateHeaders }
       );
     }
 
-    // 8. Execute on-chain dispense via relayer wallet
+    // 7. Execute on-chain dispense via relayer wallet (only for self-owned units)
     const writeContract = new ethers.Contract(PHARMA_TREE_CONTRACT, PHARMA_TREE_ABI, relayerWallet);
-    let tx: ethers.ContractTransactionResponse;
-
-    if (dispenseQty === unitQuantity) {
-      tx = await writeContract.markAsSold(unitId);
-    } else {
-      tx = await writeContract.sellQuantity(unitId, dispenseQty);
-    }
+    const tx = await enqueueRelayerTx(() => {
+      if (dispenseQty === unitQuantity) {
+        return writeContract.markAsSold(unitId);
+      } else {
+        return writeContract.sellQuantity(unitId, dispenseQty);
+      }
+    });
 
     const receipt = await tx.wait(1);
 

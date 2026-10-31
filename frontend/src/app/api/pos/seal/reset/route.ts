@@ -12,6 +12,7 @@ import {
   parseSafePositiveInt,
 } from "@/lib/rateLimit";
 import { resetSealLock } from "@/lib/sealVerifier";
+import { saveUnitEvent } from "@/lib/db";
 
 export async function POST(req: NextRequest) {
   const rateLimit = checkRateLimit(req, {
@@ -102,6 +103,21 @@ export async function POST(req: NextRequest) {
         { success: false, error: "UNAUTHORIZED", message: resetResult.message },
         { status: 403, headers: rateHeaders }
       );
+    }
+
+    // Record immutable regulatory audit trail for the administrative reset
+    try {
+      await saveUnitEvent({
+        unitId: String(unitId),
+        eventName: "SEAL_LOCKOUT_RESET",
+        fromAddress: callerAddress,
+        toAddress: manufacturer,
+        blockNumber: 0,
+        txHash: `auth-reset-${Date.now()}-${callerAddress.slice(0, 10)}`,
+        timestamp: Math.floor(Date.now() / 1000),
+      });
+    } catch (auditErr) {
+      console.warn("Non-fatal: could not write audit log for seal reset:", auditErr);
     }
 
     return NextResponse.json(

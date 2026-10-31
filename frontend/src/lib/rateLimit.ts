@@ -1,6 +1,7 @@
 import { NextRequest } from "next/server";
 import { Ratelimit } from "@upstash/ratelimit";
 import { Redis } from "@upstash/redis";
+import { checkAndIncrementVendorQuotaDb } from "./db";
 
 interface RateLimitRecord {
   timestamps: number[];
@@ -40,18 +41,28 @@ export interface RateLimitResult {
 }
 
 /**
- * Extracts a resilient client IP from standard Next.js headers
+ * Extracts a resilient client IP from standard Next.js and edge platform headers.
+ * Prioritizes platform-attested headers (x-vercel-forwarded-for, x-real-ip, cf-connecting-ip)
+ * over client-spoofable standard x-forwarded-for.
  */
 export function getClientIp(req: NextRequest): string {
+  const vercelForwarded = req.headers.get("x-vercel-forwarded-for");
+  if (vercelForwarded) {
+    return vercelForwarded.split(",")[0].trim();
+  }
+  const realIp = req.headers.get("x-real-ip");
+  if (realIp) {
+    return realIp.split(",")[0].trim();
+  }
+  const cfIp = req.headers.get("cf-connecting-ip");
+  if (cfIp) {
+    return cfIp.split(",")[0].trim();
+  }
   const forwarded = req.headers.get("x-forwarded-for");
   if (forwarded) {
     return forwarded.split(",")[0].trim();
   }
-  return (
-    req.headers.get("x-real-ip") ||
-    req.headers.get("cf-connecting-ip") ||
-    "127.0.0.1"
-  );
+  return "127.0.0.1";
 }
 
 // Initialize Upstash Redis if environment credentials exist
@@ -212,9 +223,7 @@ export function sanitizeInputString(raw: unknown, maxLength = 256): string {
     .slice(0, maxLength);
 }
 
-// Store daily vendor quotas in memory
-const inMemoryVendorQuotas: Record<string, number> = {};
-
+// Durable vendor quotas are managed via Postgres in lib/db.ts
 /**
  * Checks and increments the daily transaction/gas quota for an authenticated vendor wallet
  * Default limit: 50 dispensing transactions per 24-hour UTC day
@@ -239,19 +248,12 @@ export async function checkVendorDailyQuota(
         remaining: Math.max(0, limit - count),
       };
     } catch (err) {
-      console.warn("[RateLimit] Upstash quota error, falling back to in-memory:", err);
+      console.warn("[RateLimit] Upstash quota error, falling back to database/in-memory:", err);
     }
   }
 
-  const existing = inMemoryVendorQuotas[dayKey] || 0;
-  const newCount = existing + 1;
-  inMemoryVendorQuotas[dayKey] = newCount;
-
-  return {
-    allowed: newCount <= limit,
-    count: newCount,
-    remaining: Math.max(0, limit - newCount),
-  };
+  // Fallback to durable Postgres database (with in-memory fallback)
+  return checkAndIncrementVendorQuotaDb(cleanVendor, limit);
 }
 
 /**
