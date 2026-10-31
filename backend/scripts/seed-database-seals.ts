@@ -40,7 +40,10 @@ async function main() {
   ).toLowerCase();
 
   console.log(`Connecting to database to seed seals for contract: ${contractAddress}...`);
-  const { Pool } = await import("@neondatabase/serverless");
+  const { Pool, neonConfig } = await import("@neondatabase/serverless");
+  // @ts-ignore
+  const ws: any = await import("ws");
+  neonConfig.webSocketConstructor = ws.default || ws;
   const pool = new Pool({ connectionString: dbUrl });
   const client = await pool.connect();
 
