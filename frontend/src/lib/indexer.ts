@@ -10,7 +10,7 @@ import {
   DbUnitEvent,
 } from "./db";
 
-const DEFAULT_DEPLOYMENT_BLOCK = 11928000;
+const DEFAULT_DEPLOYMENT_BLOCK = 12032098;
 let isIndexing = false;
 
 export interface IndexerSyncResult {
@@ -109,7 +109,7 @@ export async function syncChainEvents(forceFromBlock?: number): Promise<IndexerS
     const iface = new ethers.Interface(PHARMA_TREE_ABI);
 
     const configuredStart = Number(process.env.NEXT_PUBLIC_DEPLOYMENT_BLOCK || DEFAULT_DEPLOYMENT_BLOCK);
-    const lastIndexed = await getLastIndexedBlock(configuredStart);
+    const lastIndexed = await getLastIndexedBlock(configuredStart, PHARMA_TREE_CONTRACT);
     const fromBlock = forceFromBlock ?? Math.max(lastIndexed, configuredStart);
 
     let latestBlock = fromBlock;
@@ -211,7 +211,7 @@ export async function syncChainEvents(forceFromBlock?: number): Promise<IndexerS
       await Promise.all(hydrationPromises);
     }
 
-    await setLastIndexedBlock(latestBlock);
+    await setLastIndexedBlock(latestBlock, PHARMA_TREE_CONTRACT);
 
     return {
       success: true,

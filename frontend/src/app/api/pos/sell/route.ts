@@ -13,13 +13,41 @@ import {
   getRateLimitHeaders,
   parseSafePositiveInt,
 } from "@/lib/rateLimit";
+import { withRelayerLock } from "@/lib/db";
 
-// In-process transaction queue for relayer to prevent nonce collisions under concurrent load
-let relayerQueuePromise = Promise.resolve<any>(undefined);
-function enqueueRelayerTx<T>(fn: () => Promise<T>): Promise<T> {
-  const result = relayerQueuePromise.then(fn, fn);
-  relayerQueuePromise = result.catch(() => {});
-  return result;
+/**
+ * Execute an on-chain transaction with dynamic pending nonce resolution and jittered retry backoff.
+ */
+async function executeWithNonceRetry<T>(
+  wallet: ethers.Wallet,
+  sendFn: (nonce: number) => Promise<T>,
+  maxRetries = 3
+): Promise<T> {
+  let attempt = 0;
+  while (attempt < maxRetries) {
+    try {
+      const nonce = await wallet.getNonce("pending");
+      return await sendFn(nonce);
+    } catch (err: any) {
+      attempt++;
+      const msg = (err?.message || "").toLowerCase();
+      const isNonceCollision =
+        msg.includes("nonce") ||
+        msg.includes("replacement transaction underpriced") ||
+        msg.includes("already known");
+      if (isNonceCollision && attempt < maxRetries) {
+        const jitterMs = 300 + Math.floor(Math.random() * 500) * attempt;
+        console.warn(
+          `[Relayer] Nonce collision detected (attempt ${attempt}/${maxRetries}), retrying in ${jitterMs}ms:`,
+          err.message
+        );
+        await new Promise((res) => setTimeout(res, jitterMs));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw new Error("Relayer transaction failed after maximum retries");
 }
 
 export async function POST(req: NextRequest) {
@@ -199,7 +227,9 @@ export async function POST(req: NextRequest) {
         );
       }
 
-      const tx = await enqueueRelayerTx(() => forwarder.execute(fwd));
+      const tx = await withRelayerLock(() =>
+        executeWithNonceRetry(relayerWallet, (nonce) => forwarder.execute(fwd, { nonce }))
+      );
       const receipt = await tx.wait(1);
 
       return NextResponse.json(
@@ -242,13 +272,15 @@ export async function POST(req: NextRequest) {
 
     // 7. Execute on-chain dispense via relayer wallet (only for self-owned units)
     const writeContract = new ethers.Contract(PHARMA_TREE_CONTRACT, PHARMA_TREE_ABI, relayerWallet);
-    const tx = await enqueueRelayerTx(() => {
-      if (dispenseQty === unitQuantity) {
-        return writeContract.markAsSold(unitId);
-      } else {
-        return writeContract.sellQuantity(unitId, dispenseQty);
-      }
-    });
+    const tx = await withRelayerLock(() =>
+      executeWithNonceRetry(relayerWallet, (nonce) => {
+        if (dispenseQty === unitQuantity) {
+          return writeContract.markAsSold(unitId, { nonce });
+        } else {
+          return writeContract.sellQuantity(unitId, dispenseQty, { nonce });
+        }
+      })
+    );
 
     const receipt = await tx.wait(1);
 

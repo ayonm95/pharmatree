@@ -158,6 +158,7 @@ export async function initDbSchema(): Promise<void> {
 
       CREATE TABLE IF NOT EXISTS seal_secrets (
         unit_id VARCHAR(64) PRIMARY KEY,
+        contract_address VARCHAR(42) DEFAULT '0xbd245c7f7c8bf4a8ec016e8c370d3e6931bead72',
         verifier VARCHAR(128) NOT NULL,
         scheme INTEGER NOT NULL DEFAULT 1,
         state VARCHAR(32) DEFAULT 'SEALED',
@@ -168,6 +169,7 @@ export async function initDbSchema(): Promise<void> {
 
       CREATE TABLE IF NOT EXISTS units (
         unit_id VARCHAR(64) PRIMARY KEY,
+        contract_address VARCHAR(42) DEFAULT '0xbd245c7f7c8bf4a8ec016e8c370d3e6931bead72',
         parent_id VARCHAR(64),
         root_id VARCHAR(64),
         level INTEGER,
@@ -186,6 +188,7 @@ export async function initDbSchema(): Promise<void> {
       CREATE TABLE IF NOT EXISTS unit_events (
         id SERIAL PRIMARY KEY,
         unit_id VARCHAR(64) NOT NULL,
+        contract_address VARCHAR(42) DEFAULT '0xbd245c7f7c8bf4a8ec016e8c370d3e6931bead72',
         event_name VARCHAR(64) NOT NULL,
         from_address VARCHAR(42),
         to_address VARCHAR(42),
@@ -195,7 +198,7 @@ export async function initDbSchema(): Promise<void> {
       );
 
       CREATE TABLE IF NOT EXISTS indexer_state (
-        key VARCHAR(64) PRIMARY KEY,
+        key VARCHAR(128) PRIMARY KEY,
         value VARCHAR(256) NOT NULL,
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
       );
@@ -214,6 +217,11 @@ export async function initDbSchema(): Promise<void> {
         day_date DATE NOT NULL DEFAULT CURRENT_DATE,
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
       );
+
+      -- Ensure multi-contract scoping columns exist on existing deployments
+      ALTER TABLE units ADD COLUMN IF NOT EXISTS contract_address VARCHAR(42) DEFAULT '0xbd245c7f7c8bf4a8ec016e8c370d3e6931bead72';
+      ALTER TABLE unit_events ADD COLUMN IF NOT EXISTS contract_address VARCHAR(42) DEFAULT '0xbd245c7f7c8bf4a8ec016e8c370d3e6931bead72';
+      ALTER TABLE seal_secrets ADD COLUMN IF NOT EXISTS contract_address VARCHAR(42) DEFAULT '0xbd245c7f7c8bf4a8ec016e8c370d3e6931bead72';
     `);
     schemaInitialized = true;
   } catch (err) {
@@ -774,14 +782,16 @@ export async function getUnitEvents(unitId: string): Promise<DbUnitEvent[]> {
 }
 
 /**
- * Track last indexed block
+ * Track last indexed block, optionally scoped by contract address
  */
-export async function getLastIndexedBlock(defaultBlock = 11995000): Promise<number> {
+export async function getLastIndexedBlock(defaultBlock = 12032098, contractAddress?: string): Promise<number> {
+  const indexerKey = contractAddress ? `last_indexed_block:${contractAddress.toLowerCase()}` : "last_indexed_block";
   if (neonPool) {
     await initDbSchema();
     try {
       const res = await neonPool.query(
-        `SELECT value FROM indexer_state WHERE key = 'last_indexed_block';`
+        `SELECT value FROM indexer_state WHERE key = $1 OR key = 'last_indexed_block' ORDER BY updated_at DESC LIMIT 1;`,
+        [indexerKey]
       );
       if (res.rows.length > 0) {
         return Number(res.rows[0].value);
@@ -793,26 +803,28 @@ export async function getLastIndexedBlock(defaultBlock = 11995000): Promise<numb
   }
 
   // Fallback
-  if (inMemoryIndexerState.last_indexed_block) {
-    return Number(inMemoryIndexerState.last_indexed_block);
+  if (inMemoryIndexerState[indexerKey] || inMemoryIndexerState.last_indexed_block) {
+    return Number(inMemoryIndexerState[indexerKey] || inMemoryIndexerState.last_indexed_block);
   }
   const diskState = safeReadJson<Record<string, any>>("indexer_state.json", {});
-  if (diskState.last_indexed_block) {
-    inMemoryIndexerState.last_indexed_block = diskState.last_indexed_block;
-    return Number(diskState.last_indexed_block);
+  if (diskState[indexerKey] || diskState.last_indexed_block) {
+    const val = diskState[indexerKey] || diskState.last_indexed_block;
+    inMemoryIndexerState[indexerKey] = val;
+    return Number(val);
   }
   return defaultBlock;
 }
 
-export async function setLastIndexedBlock(blockNumber: number): Promise<void> {
+export async function setLastIndexedBlock(blockNumber: number, contractAddress?: string): Promise<void> {
+  const indexerKey = contractAddress ? `last_indexed_block:${contractAddress.toLowerCase()}` : "last_indexed_block";
   if (neonPool) {
     await initDbSchema();
     try {
       await neonPool.query(
         `INSERT INTO indexer_state (key, value, updated_at)
-         VALUES ('last_indexed_block', $1, NOW())
-         ON CONFLICT (key) DO UPDATE SET value = $1, updated_at = NOW();`,
-        [String(blockNumber)]
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW();`,
+        [indexerKey, String(blockNumber)]
       );
       return;
     } catch (err) {
@@ -821,10 +833,52 @@ export async function setLastIndexedBlock(blockNumber: number): Promise<void> {
   }
 
   // Fallback
-  inMemoryIndexerState.last_indexed_block = blockNumber;
+  inMemoryIndexerState[indexerKey] = blockNumber;
   const diskState = safeReadJson<Record<string, any>>("indexer_state.json", {});
-  diskState.last_indexed_block = blockNumber;
+  diskState[indexerKey] = blockNumber;
   safeWriteJson("indexer_state.json", diskState);
+}
+
+// Relayer distributed concurrency lock across serverless instances
+const RELAYER_ADVISORY_LOCK_ID = 73319042;
+let inProcessRelayerQueuePromise = Promise.resolve<any>(undefined);
+
+function inProcessRelayerQueue<T>(action: () => Promise<T>): Promise<T> {
+  const result = inProcessRelayerQueuePromise.then(action, action);
+  inProcessRelayerQueuePromise = result.catch(() => {});
+  return result;
+}
+
+/**
+ * PostgreSQL distributed advisory lock to serialize relayer transactions across serverless instances.
+ * Falls back to an in-process promise queue if PostgreSQL is not connected.
+ */
+export async function withRelayerLock<T>(action: () => Promise<T>): Promise<T> {
+  if (neonPool) {
+    let client: any = null;
+    try {
+      client = await neonPool.connect();
+      await client.query("SELECT pg_advisory_lock($1);", [RELAYER_ADVISORY_LOCK_ID]);
+      try {
+        return await action();
+      } finally {
+        try {
+          await client.query("SELECT pg_advisory_unlock($1);", [RELAYER_ADVISORY_LOCK_ID]);
+        } catch (unlockErr) {
+          console.warn("[RelayerLock] Error releasing advisory unlock:", unlockErr);
+        }
+        client.release();
+      }
+    } catch (err) {
+      console.warn("[RelayerLock] Advisory lock failed, falling back to in-process mutex:", err);
+      if (client) {
+        try {
+          client.release();
+        } catch {}
+      }
+    }
+  }
+  return inProcessRelayerQueue(action);
 }
 
 export interface DbSealRecord {

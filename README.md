@@ -51,7 +51,7 @@ flowchart TD
     end
 
     subgraph Blockchain["Ethereum Sepolia Testnet"]
-        Contract["PharmaTree.sol (0x7c40...198)"]
+        Contract["PharmaTree.sol (0xbD24...d72)"]
         RBAC["Access Control Matrix"]
         Units["Unit Registry & Partitions"]
         Events["Audit Log (UnitCreated, TransferInitiated, TransferRejected, etc.)"]
@@ -319,9 +319,9 @@ To balance security rigor with retail dispensary throughput, PharmaTree defines 
 
 ---
 
-## 🧪 Comprehensive Test Suite (81 Automated Tests Passing)
+## 🧪 Comprehensive Test Suite (82 Automated Tests Passing)
 
-The monorepo features **81 passing automated tests** (65 Hardhat contract & invariant tests + 16 Vitest frontend API security tests) and **93.59% Solidity statement coverage** across 8 test suites:
+The monorepo features **82 passing automated tests** (65 Hardhat contract & invariant tests + 17 Vitest frontend API security tests) and **93.59% Solidity statement coverage** across 8 test suites:
 
 ```bash
 # Run all smart contract, invariant, and cryptographic seal tests
@@ -343,9 +343,9 @@ npm run test:all
 - **`Eip712Forwarder.test.ts` (7 tests)**: Trusted forwarder address recording, unprivileged relayer role isolation (zero roles), direct owner execution fallback, valid EIP-712 meta-transaction execution via `ERC2771Forwarder`, forged signature rejection, and non-forwarder calldata sender spoofing prevention.
 - **`AtomicSellRace.test.ts` (2 tests)**: Concurrent checkout race conditions evaluated under disabled automine (`evm_setAutomine(false)` and `evm_mine`), verifying that the first transaction atomically mines while the concurrent one reverts with `Unit is not active`, and fractional inventory split conservation.
 
-#### Frontend APIs & Off-Chain Security (Vitest - 16 tests)
+#### Frontend APIs & Off-Chain Security (Vitest - 17 tests)
 - **`sealVerifier.test.ts` (7 tests)**: Crockford Base32 character normalization, 12-char high-entropy secret generation, constant-time `timingSafeEqual` comparison, versioned HMAC verifiers (`v1:`), exponential backoff timing curves, client IP isolation under DoS attacks, and authorized manufacturer/admin lockout reset.
-- **`rateLimit.test.ts` (7 tests)**: Resilient client IP extraction from trusted platform headers (`x-vercel-forwarded-for`, `x-real-ip`, `cf-connecting-ip`), SHA-256 HMAC client IP hashing with server pepper, and vendor daily gasless transaction quotas (50 tx/day limit with atomic quota decrements).
+- **`rateLimit.test.ts` (8 tests)**: Resilient client IP extraction from trusted platform headers (`x-vercel-forwarded-for`, `x-real-ip`, `cf-connecting-ip`), SHA-256 HMAC client IP hashing with server pepper, vendor daily gasless transaction quotas (50 tx/day limit with atomic quota decrements), and simultaneous `Promise.all` concurrency atomicity.
 - **`posSellApi.test.ts` (2 tests)**: Gasless relayer balance circuit breaker (< 0.001 ETH hard cutoff returning HTTP 503), and strict requirement for EIP-712 forward requests for third-party dispensary units.
 
 ```text

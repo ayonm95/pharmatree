@@ -76,5 +76,26 @@ describe("Platform Security, IP Resolution & Vendor Quotas", () => {
       expect(r4.allowed).toBe(false);
       expect(r4.remaining).toBe(0);
     });
+
+    it("should atomically handle simultaneous concurrent quota increments without lost updates", async () => {
+      const concurrentVendor = `0x999988887777666655554444333322221111${Date.now().toString().slice(-4)}`;
+      const maxLimit = 10;
+      // Launch 10 simultaneous calls via Promise.all
+      const results = await Promise.all(
+        Array.from({ length: 10 }, () => checkAndIncrementVendorQuotaDb(concurrentVendor, maxLimit))
+      );
+
+      const allowedCount = results.filter((r) => r.allowed).length;
+      expect(allowedCount).toBe(10);
+
+      // All counts returned should span 1..10 with strictly no duplicate counts
+      const counts = results.map((r) => r.count).sort((a, b) => a - b);
+      expect(counts).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
+
+      // The 11th request must be disallowed
+      const overflow = await checkAndIncrementVendorQuotaDb(concurrentVendor, maxLimit);
+      expect(overflow.allowed).toBe(false);
+      expect(overflow.remaining).toBe(0);
+    });
   });
 });

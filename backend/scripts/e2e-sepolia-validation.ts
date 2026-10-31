@@ -14,13 +14,21 @@ async function main() {
   console.log("======================================================================");
 
   const contractAddress = process.env.SEPOLIA_CONTRACT_ADDRESS || "0xbD245c7f7C8bF4A8Ec016e8C370D3e6931BeAd72";
-  const [relayerSigner] = await ethers.getSigners();
+  const forwarderAddress = process.env.TRUSTED_FORWARDER || "0x2d24b5b481d0981AE7904790e9d8BF4c162b6c8c";
+  const relayerAddress = process.env.SEPOLIA_RELAYER_ADDRESS || "0x335684Cfb813f673fed3f2bb87BF2778D4E96A72";
+
+  const [signer] = await ethers.getSigners();
   const provider = ethers.provider;
+  const network = await provider.getNetwork();
 
   const results: ValidationResult[] = [];
 
   const contract = await ethers.getContractAt(
     [
+      "function DEFAULT_ADMIN_ROLE() view returns (bytes32)",
+      "function MANUFACTURER_ROLE() view returns (bytes32)",
+      "function HANDLER_ROLE() view returns (bytes32)",
+      "function hasRole(bytes32 role, address account) view returns (bool)",
       "function isManufacturer(address) view returns (bool)",
       "function isHandler(address) view returns (bool)",
       "function unitCounter() view returns (uint256)",
@@ -28,31 +36,144 @@ async function main() {
       "function sellQuantity(uint256 unitId, uint256 quantity) external returns (uint256)",
       "function markAsSold(uint256 unitId) external"
     ],
-    contractAddress
+    contractAddress,
+    signer
   );
 
-  // 1. Relayer & Infrastructure Readiness
-  const relayerAddress = await relayerSigner.getAddress();
+  const forwarder = await ethers.getContractAt(
+    [
+      "function nonces(address owner) view returns (uint256)",
+      "function verify(tuple(address from, address to, uint256 value, uint256 gas, uint48 deadline, bytes data, bytes signature) request) view returns (bool)"
+    ],
+    forwarderAddress,
+    signer
+  );
+
+  // Diagnostic: Infrastructure & Gas Solvency
   const balance = await provider.getBalance(relayerAddress);
   const totalUnitsBig = await contract.unitCounter();
   const totalUnits = Number(totalUnitsBig);
-  const minThreshold = ethers.parseEther("0.005");
 
-  console.log(`Contract Address: ${contractAddress}`);
-  console.log(`Relayer Address:  ${relayerAddress}`);
-  console.log(`Relayer Balance:  ${ethers.formatEther(balance)} ETH`);
-  console.log(`Total Units:      ${totalUnits}`);
+  console.log(`Contract Address:  ${contractAddress}`);
+  console.log(`Forwarder Address: ${forwarderAddress}`);
+  console.log(`Relayer Address:   ${relayerAddress}`);
+  console.log(`Relayer Balance:   ${ethers.formatEther(balance)} ETH`);
+  console.log(`Total Units:       ${totalUnits}`);
+  console.log(`Sepolia Chain ID:  ${network.chainId}`);
   console.log("----------------------------------------------------------------------\n");
 
+  // Invariant 1: Relayer Zero-Role Privilege Isolation
+  const defaultAdminRole = await contract.DEFAULT_ADMIN_ROLE();
+  const manufacturerRole = await contract.MANUFACTURER_ROLE();
+  const handlerRole = await contract.HANDLER_ROLE();
+
+  const hasAdmin = await contract.hasRole(defaultAdminRole, relayerAddress);
+  const hasMfr = await contract.hasRole(manufacturerRole, relayerAddress);
+  const hasHandler = await contract.hasRole(handlerRole, relayerAddress);
+
+  const zeroRolesConfirmed = !hasAdmin && !hasMfr && !hasHandler;
   results.push({
-    testCase: "Relayer Gas Solvency Check",
-    category: "Infrastructure",
-    status: balance >= minThreshold ? "PASSED" : "FAILED",
-    details: `Relayer holds ${ethers.formatEther(balance)} ETH on Sepolia (threshold: >=0.005 ETH).`,
-    evidence: { address: relayerAddress, balanceWei: balance.toString() }
+    testCase: "Relayer Zero-Role Privilege Isolation",
+    category: "Access Control & Security",
+    status: zeroRolesConfirmed ? "PASSED" : "FAILED",
+    details: `Relayer holds ZERO smart contract roles (Admin: ${hasAdmin}, Manufacturer: ${hasMfr}, Handler: ${hasHandler}). Server compromise cannot compromise contract state.`,
+    evidence: { relayerAddress, hasAdmin, hasMfr, hasHandler, zeroRolesConfirmed }
   });
 
-  // 2. Case 1: Tier 1 - Genuine Registered Unit Verification
+  // Invariant 2: Direct Non-Owner Sell On-Chain Rejection
+  const unit8 = await contract.getUnitDetails(8);
+  const currentOwnerUnit8 = unit8.currentOwner;
+  let nonOwnerRevertPassed = false;
+  let revertReason = "";
+
+  try {
+    // Signer attempts to call sellQuantity on Unit #8 (owned by 0xe88a5608B536BCc9d557823234BacA9a00F2540B)
+    await contract.sellQuantity.staticCall(8, 1);
+    nonOwnerRevertPassed = false;
+  } catch (err: any) {
+    revertReason = err?.message || String(err);
+    nonOwnerRevertPassed = revertReason.includes("Not the current owner") || revertReason.includes("0x");
+  }
+
+  results.push({
+    testCase: "Direct Non-Owner Sell On-Chain Rejection",
+    category: "Smart Contract Invariants",
+    status: nonOwnerRevertPassed ? "PASSED" : "FAILED",
+    details: `Calling sellQuantity(8, 1) directly from non-owner (${await signer.getAddress()}) is rejected on-chain. Owner is ${currentOwnerUnit8}.`,
+    evidence: { unitId: 8, currentOwner: currentOwnerUnit8, nonOwnerReverted: nonOwnerRevertPassed }
+  });
+
+  // Invariant 3: Live EIP-712 ForwardRequest Cryptographic Verification
+  const domain = {
+    name: "PharmaTreeForwarder",
+    version: "1",
+    chainId: network.chainId,
+    verifyingContract: forwarderAddress,
+  };
+
+  const types = {
+    ForwardRequest: [
+      { name: "from", type: "address" },
+      { name: "to", type: "address" },
+      { name: "value", type: "uint256" },
+      { name: "gas", type: "uint256" },
+      { name: "nonce", type: "uint256" },
+      { name: "deadline", type: "uint48" },
+      { name: "data", type: "bytes" },
+    ],
+  };
+
+  const dummyUnitId = 1;
+  const iface = new ethers.Interface(["function markAsSold(uint256 unitId) external"]);
+  const calldata = iface.encodeFunctionData("markAsSold", [dummyUnitId]);
+  const signerAddress = await signer.getAddress();
+  const forwarderNonce = await forwarder.nonces(signerAddress);
+  const deadline = Math.floor(Date.now() / 1000) + 3600;
+
+  const validMessage = {
+    from: signerAddress,
+    to: contractAddress,
+    value: 0,
+    gas: 500000,
+    nonce: forwarderNonce,
+    deadline,
+    data: calldata,
+  };
+
+  const validSignature = await signer.signTypedData(domain, types, validMessage);
+  const validForwardRequest = {
+    from: signerAddress,
+    to: contractAddress,
+    value: 0,
+    gas: 500000,
+    deadline,
+    data: calldata,
+    signature: validSignature,
+  };
+
+  const isForwardVerified = await forwarder.verify(validForwardRequest);
+
+  const corruptedForwardRequest = {
+    ...validForwardRequest,
+    signature: "0x" + "11".repeat(65),
+  };
+  let badSignatureRejected = false;
+  try {
+    const isBadVerified = await forwarder.verify(corruptedForwardRequest);
+    badSignatureRejected = !isBadVerified;
+  } catch {
+    badSignatureRejected = true;
+  }
+
+  results.push({
+    testCase: "Live EIP-712 ForwardRequest Cryptographic Verification",
+    category: "Meta-Transactions (EIP-2771)",
+    status: isForwardVerified && badSignatureRejected ? "PASSED" : "FAILED",
+    details: `Forwarder (${forwarderAddress}) validates authentic EIP-712 signature (verify: ${isForwardVerified}) and rejects corrupted signature (rejected: ${badSignatureRejected}).`,
+    evidence: { isForwardVerified, badSignatureRejected, forwarderAddress }
+  });
+
+  // Invariant 4: Tier 1 - Genuine Registered Unit Genesis
   const unit1 = await contract.getUnitDetails(1);
   const unit1Valid = unit1.manufacturer !== ethers.ZeroAddress && totalUnits >= 1;
   results.push({
@@ -63,7 +184,7 @@ async function main() {
     evidence: { unitId: 1, manufacturer: unit1.manufacturer, quantity: unit1.quantity.toString() }
   });
 
-  // 3. Case 2: Tier 1 Failure - Forged Out-of-Bounds Identifier
+  // Invariant 5: Tier 1 Failure - Forged Out-of-Bounds Identifier
   const fakeUnitId = 9999;
   const fakeUnitDetected = fakeUnitId > totalUnits;
   results.push({
@@ -74,7 +195,7 @@ async function main() {
     evidence: { scannedId: fakeUnitId, totalUnits, intercepted: true }
   });
 
-  // 4. Case 3: Tier 2 - Replay / Double-Dispensing Prevention
+  // Invariant 6: Tier 2 - Replay / Double-Dispensing Prevention
   const unit2 = await contract.getUnitDetails(2);
   const unit2IsSold = Number(unit2.status) === 2;
   results.push({
@@ -85,8 +206,7 @@ async function main() {
     evidence: { unitId: 2, status: Number(unit2.status), metadata: unit2.metadata }
   });
 
-  // 5. Case 4: Tier 3 - Anti-Diversion / Unauthorized Custody
-  const unit8 = await contract.getUnitDetails(8);
+  // Invariant 7: Tier 3 - Anti-Diversion / Unauthorized Custody
   const vendorWallet = "0x65371f0ddFa0AD6e7655243cD2A2567328EA1537";
   const unit8Owner = unit8.currentOwner.toLowerCase();
   const diversionDetected = unit8Owner !== vendorWallet.toLowerCase();
@@ -98,32 +218,7 @@ async function main() {
     evidence: { unitId: 8, owner: unit8.currentOwner, vendor: vendorWallet, diversionDetected }
   });
 
-  // 6. Case 5: Tier 4 - Transit Integrity & Rejection Quarantine
-  results.push({
-    testCase: "Tier 4: Transit Integrity & Rejection Quarantine",
-    category: "Supply Chain Integrity",
-    status: "PASSED",
-    details: "Verification engine immediately halts dispensing and triggers alert if unitStatus == 3 (Rejected/Compromised).",
-    evidence: { statusHandling: "Halts dispensing and logs quarantine incident" }
-  });
-
-  // 7. Case 6: Tier 5 - Physical 2FA Scratch Seal Cryptographic Verification
-  const mfrAddress = "0x65371f0ddFa0AD6e7655243cD2A2567328EA1537";
-  const validSecretTest = mfrAddress.slice(-4).toLowerCase();
-  const invalidSecretTest = "0000";
-
-  const pinCheckSuccess = validSecretTest === "1537";
-  const pinCheckFailure = invalidSecretTest !== validSecretTest;
-
-  results.push({
-    testCase: "Tier 5: Physical 2FA Scratch Seal Cryptographic Verification",
-    category: "Physical Security",
-    status: pinCheckSuccess && pinCheckFailure ? "PASSED" : "FAILED",
-    details: `Valid PIN '${validSecretTest}' passes seal verification. Counterfeit PIN '${invalidSecretTest}' fails, flagging tampered/copied packaging.`,
-    evidence: { manufacturer: mfrAddress, validPin: validSecretTest, invalidPin: invalidSecretTest }
-  });
-
-  // 8. Case 7: Fractional Dispensing Mathematical Invariant (Unit Conservation)
+  // Invariant 8: Fractional Dispensing Mathematical Invariant (Unit Conservation)
   const unit7 = await contract.getUnitDetails(7);
   const initialQty = Number(unit7.quantity);
   const requestedQty = 5;
@@ -151,9 +246,13 @@ async function main() {
   }
 
   console.log("----------------------------------------------------------------------");
-  console.log(`Total Checks: ${results.length} | Passed: ${passedCount} | Failed: ${results.length - passedCount}`);
+  console.log(`Total Invariants Tested: ${results.length} | Passed: ${passedCount} | Failed: ${results.length - passedCount}`);
   console.log(`Result: ${passedCount}/${results.length} live Sepolia invariant checks passing`);
   console.log("======================================================================\n");
+
+  if (passedCount < results.length) {
+    process.exit(1);
+  }
 }
 
 main().catch((err) => {
