@@ -6,7 +6,7 @@
 [![Solidity](https://img.shields.io/badge/Solidity-0.8.20-blue?logo=solidity)](https://soliditylang.org/)
 [![Ethereum](https://img.shields.io/badge/Ethereum-Sepolia%20Testnet-627EEA?logo=ethereum)](https://sepolia.etherscan.io/address/0xbD245c7f7C8bF4A8Ec016e8C370D3e6931BeAd72)
 [![Next.js](https://img.shields.io/badge/Next.js-16.4.3-black?logo=next.js)](https://nextjs.org/)
-[![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
+[![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
 
 PharmaTree is a decentralized pharmaceutical supply chain tracking platform designed to provide tamper-evident provenance, verifiable custody handshakes, zero double-dispensing, and instant consumer authenticity verification through cryptographic proof on the Ethereum blockchain.
 
@@ -384,6 +384,8 @@ npx hardhat run scripts/deploy-and-sync-env.ts --network sepolia
 
 ---
 
-## 📜 License
+## 📜 License & Intellectual Property
 
-This project is licensed under the MIT License.
+Copyright (c) 2026 Ayon Moitra. All Rights Reserved.
+
+This software, its smart contracts, backend services, and documentation are proprietary and confidential. Unauthorized copying, modification, commercial redistribution, or operating competing hosted SaaS services is strictly prohibited. See [LICENSE](LICENSE) for full legal terms.

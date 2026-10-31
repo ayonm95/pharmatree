@@ -651,4 +651,4 @@ In serverless environments (like Vercel), in-memory rate limiting and local `.da
 - Monorepo: [Pharma](https://github.com/ayonm95/Pharma)
 - LinkedIn: [Ayon Moitra](https://www.linkedin.com/in/ayon-moitra/)
 
-This project is distributed under the [MIT License](./LICENSE).
+This project is proprietary commercial software. All rights reserved. See [LICENSE](./LICENSE).

@@ -15,8 +15,8 @@
     "verify:sepolia": "hardhat run scripts/sepolia-one-click-flow.ts --network sepolia"
   },
   "keywords": [],
-  "author": "",
-  "license": "ISC",
+  "author": "Ayon Moitra",
+  "license": "UNLICENSED",
   "devDependencies": {
     "@neondatabase/serverless": "^1.2.0",
     "@nomicfoundation/hardhat-chai-matchers": "^2.1.2",
