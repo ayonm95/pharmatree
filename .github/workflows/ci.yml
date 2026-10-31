@@ -69,7 +69,7 @@ jobs:
         working-directory: ./frontend
         run: npm run lint
 
-      - name: Run Vitest API security tests (16 tests)
+      - name: Run Vitest API security tests (17 tests)
         working-directory: ./frontend
         run: npm test
 
