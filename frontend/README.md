@@ -52,7 +52,7 @@ ALLOW_LEGACY_SEALS=false
 
 ---
 
-## 🧪 Testing (53 Automated Tests)
+## 🧪 Testing (62 Automated Tests)
 
 Run frontend unit and integration tests with Vitest:
 
@@ -61,8 +61,9 @@ npm test
 ```
 
 Covers:
+- `serial.test.ts`: Crockford Base32 normalization and CSPRNG high-entropy client serial generation.
 - `sealVerifier.test.ts`: Scheme 1 Crockford Base32 HMAC-SHA256, 24-hr lockout, and anti-DoS IP isolation.
-- `tierEvaluator.test.ts`: 5-tier anti-counterfeiting verification rules and prescription child detection.
+- `tierEvaluator.test.ts`: 5-tier anti-counterfeiting verification rules, serial matching, and prescription child detection.
 - `rateLimit.test.ts`: Sliding-window distributed rate limiting and IPv6 subnet masking.
 - `tenantAuth.test.ts`: Header authentication, API key verification, and fail-closed quotas.
 - `posSellApi.test.ts`: Idempotency keys, input validation, and POS sell API contracts.

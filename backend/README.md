@@ -1,6 +1,6 @@
 # PharmaTree Smart Contracts & Backend
 
-The smart contract foundation of the **PharmaTree** decentralized pharmaceutical tracking network. Built with **Solidity ^0.8.20** (compiled with **v0.8.28**), **Hardhat**, and **Ethers.js v6**.
+The smart contract foundation of the **PharmaTree** decentralized pharmaceutical tracking network. Built with **Solidity ^0.8.24** (compiled with **v0.8.24+commit.e11b9ed9**), **Hardhat**, and **Ethers.js v6**.
 
 ---
 
@@ -13,7 +13,7 @@ The smart contract foundation of the **PharmaTree** decentralized pharmaceutical
 | **Contract Address** | [`0xa51Fe74519fFdd2f167e74780Be7AAD155eEF345`](https://sepolia.etherscan.io/address/0xa51Fe74519fFdd2f167e74780Be7AAD155eEF345#code) (Verified) |
 | **Trusted Forwarder** | [`0x2d24b5b481d0981AE7904790e9d8BF4c162b6c8c`](https://sepolia.etherscan.io/address/0x2d24b5b481d0981AE7904790e9d8BF4c162b6c8c#code) (Verified) |
 | **Deployment Block** | `12033849` |
-| **Compiler Version** | `v0.8.28` (Cancun EVM) |
+| **Compiler Version** | `v0.8.24+commit.e11b9ed9` (Cancun EVM, `viaIR: true`) |
 
 ---
 
@@ -43,7 +43,7 @@ The smart contract foundation of the **PharmaTree** decentralized pharmaceutical
 
 ---
 
-## 🧪 Testing Suite (80 Automated Tests)
+## 🧪 Testing Suite (82 Automated Tests)
 
 Run the Chai/Hardhat test suite:
 
@@ -51,7 +51,7 @@ Run the Chai/Hardhat test suite:
 npm test
 ```
 
-All 80 comprehensive test scenarios validate:
+All 82 comprehensive test scenarios validate:
 1. **Admin & Role Authorization**: Role assignment, admin initialization, role revocation, and strict segregation of `HANDLER_ROLE`, `DISPENSER_ROLE`, and `QA_ROLE`.
 2. **Hierarchical Creation**: Root unit creation with off-chain `serialHash` and future `expiry`, parent/root lineage tracking, batch packing limits ($\le 100$), hierarchy level enforcement, zero-hash rejection, past-expiry rejection, and serial hash collision prevention.
 3. **Partial Transfers**: Sender remainder retention, child unit detachment, and mass conservation ($\sum Q$).

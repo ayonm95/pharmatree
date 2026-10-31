@@ -246,7 +246,7 @@ function VerifyContent() {
         const onChainExpiry = detail[10] ? Number(detail[10]) : 0;
         const serialParam = searchParams.get("serial");
 
-        // Uniform 404 anti-cloning defense: If unit has a registered serialHash, require correct matching serial
+        // Uniform 404 anti-enumeration defense: If unit has a registered serialHash, require correct matching serial
         if (
           onChainSerialHash &&
           onChainSerialHash !== ethers.ZeroHash &&

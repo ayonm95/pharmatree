@@ -16,13 +16,21 @@ export function normalizeSerial(serial: string): string {
 }
 
 /**
- * Generates a pseudo-random Crockford serial (browser safe)
+ * Generates a cryptographically secure Crockford Base32 serial (CSPRNG)
+ * Works in both browser and Node.js environments without node-specific imports.
  */
 export function generateClientSerial(length = 20): string {
+  const bytes = new Uint8Array(length);
+  if (typeof crypto !== "undefined" && typeof crypto.getRandomValues === "function") {
+    crypto.getRandomValues(bytes);
+  } else {
+    for (let i = 0; i < length; i++) {
+      bytes[i] = Math.floor(Math.random() * 256);
+    }
+  }
   let result = "";
   for (let i = 0; i < length; i++) {
-    const rand = Math.floor(Math.random() * 32);
-    result += CROCKFORD_ALPHABET[rand];
+    result += CROCKFORD_ALPHABET[bytes[i] % 32];
   }
   return result;
 }

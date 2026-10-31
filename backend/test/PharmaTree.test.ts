@@ -665,6 +665,105 @@ describe("PharmaTree Smart Contract", function () {
     it("Should verify that legacy deleted functions no longer exist on contract", async function () {
       expect((pharmaTree as any).createChildUnits).to.be.undefined;
       expect((pharmaTree as any).sellQuantity).to.be.undefined;
+
+      // Low-level call verification that old function selectors fail / revert
+      const contractAddress = await pharmaTree.getAddress();
+
+      // Old createRootUnit(uint8,string,uint256)
+      const oldCreateIface = new ethers.Interface([
+        "function createRootUnit(uint8 _level, string memory _metadata, uint256 _quantity) external returns (uint256)"
+      ]);
+      const oldCreateCalldata = oldCreateIface.encodeFunctionData("createRootUnit", [0, "Legacy Unit", 10]);
+      await expect(
+        manufacturer.sendTransaction({ to: contractAddress, data: oldCreateCalldata })
+      ).to.be.reverted;
+
+      // Old sellQuantity(uint256,uint256)
+      const oldSellIface = new ethers.Interface([
+        "function sellQuantity(uint256 _id, uint256 _qty) external returns (uint256)"
+      ]);
+      const oldSellCalldata = oldSellIface.encodeFunctionData("sellQuantity", [1, 1]);
+      await expect(
+        pharmacy.sendTransaction({ to: contractAddress, data: oldSellCalldata })
+      ).to.be.reverted;
+    });
+
+    it("Should inherit expiry across child packaging, partial transfers, and partial retail sales", async function () {
+      // 1. Root unit with defaultExpiry
+      await pharmaTree.connect(manufacturer).createRootUnit(
+        UnitLevel.Container,
+        "Parent Container Batch",
+        100,
+        nextSerialHash(),
+        defaultExpiry
+      );
+      const rootUnit = await pharmaTree.getUnitDetails(1);
+      expect(rootUnit.expiry).to.equal(defaultExpiry);
+
+      // 2. Child packed via createChildUnitsBatch inherits expiry
+      const childHashes = getSerialHashes(2);
+      await pharmaTree.connect(manufacturer).createChildUnitsBatch(1, UnitLevel.Box, "Child Box", childHashes);
+      const packedChild = await pharmaTree.getUnitDetails(2);
+      expect(packedChild.expiry).to.equal(defaultExpiry);
+
+      // 3. Child detached via partial transfer inherits expiry
+      const partialTransferChildId = await pharmaTree.connect(manufacturer).initiatePartialTransfer.staticCall(
+        1,
+        distributor.address,
+        20
+      );
+      await pharmaTree.connect(manufacturer).initiatePartialTransfer(1, distributor.address, 20);
+      const transferChild = await pharmaTree.getUnitDetails(partialTransferChildId);
+      expect(transferChild.expiry).to.equal(defaultExpiry);
+
+      // 4. Sold child detached via sellQuantityWithSerialHash inherits expiry
+      const childSerialHash = nextSerialHash();
+      const soldChildId = await pharmaTree.connect(manufacturer).sellQuantityWithSerialHash.staticCall(
+        1,
+        5,
+        childSerialHash
+      );
+      await pharmaTree.connect(manufacturer).sellQuantityWithSerialHash(1, 5, childSerialHash);
+      const soldChild = await pharmaTree.getUnitDetails(soldChildId);
+      expect(soldChild.expiry).to.equal(defaultExpiry);
+      expect(soldChild.status).to.equal(Status.Sold);
+    });
+
+    it("Should enforce recall permissions and emit RootRecalled / RootUnrecalled events", async function () {
+      const [, , , , , , qa] = await ethers.getSigners();
+      await pharmaTree.connect(admin).addQA(qa.address);
+
+      await pharmaTree.connect(manufacturer).createRootUnit(
+        UnitLevel.Batch,
+        "Batch to recall",
+        50,
+        nextSerialHash(),
+        defaultExpiry
+      );
+
+      // Revert if non-manufacturer / non-QA / non-admin attempts recall
+      await expect(
+        pharmaTree.connect(unauthorized).recallRoot(1)
+      ).to.be.revertedWith("Not authorized to recall this batch");
+
+      // Successful recall by manufacturer emits RootRecalled
+      await expect(
+        pharmaTree.connect(manufacturer).recallRoot(1)
+      ).to.emit(pharmaTree, "RootRecalled").withArgs(1, manufacturer.address);
+
+      expect(await pharmaTree.recalledRoots(1)).to.be.true;
+
+      // Revert if unauthorized tries to unrecall
+      await expect(
+        pharmaTree.connect(unauthorized).unrecallRoot(1)
+      ).to.be.revertedWith("Not authorized to unrecall this batch");
+
+      // Successful unrecall by QA emits RootUnrecalled
+      await expect(
+        pharmaTree.connect(qa).unrecallRoot(1)
+      ).to.emit(pharmaTree, "RootUnrecalled").withArgs(1, qa.address);
+
+      expect(await pharmaTree.recalledRoots(1)).to.be.false;
     });
 
     it("Should correctly handle reassignCustody when owner is revoked", async function () {
@@ -694,10 +793,42 @@ describe("PharmaTree Smart Contract", function () {
         pharmaTree.connect(unauthorized).reassignCustody(1, pharmacy.address, reasonHash)
       ).to.be.revertedWith("Only Admin or QA can reassign");
 
-      // 4. Revert if unit is sold
-      // (Test sold guard separately or on sold unit)
+      // 4. Revert if new custodian is not an authorized manufacturer or handler
+      await expect(
+        pharmaTree.connect(admin).reassignCustody(1, unauthorized.address, reasonHash)
+      ).to.be.revertedWith("Custodian not authorized");
 
-      // 5. Successful reassignment by Admin
+      // 5. Revert if new custodian is address(0)
+      await expect(
+        pharmaTree.connect(admin).reassignCustody(1, ethers.ZeroAddress, reasonHash)
+      ).to.be.revertedWith("Invalid custodian");
+
+      // 6. Revert if reason hash is zero
+      await expect(
+        pharmaTree.connect(admin).reassignCustody(1, pharmacy.address, ethers.ZeroHash)
+      ).to.be.revertedWith("Reason hash required");
+
+      // 7. Revert if unit does not exist
+      await expect(
+        pharmaTree.connect(admin).reassignCustody(99999, pharmacy.address, reasonHash)
+      ).to.be.revertedWith("Unit does not exist");
+
+      // 8. Revert if unit is already Sold
+      await pharmaTree.connect(manufacturer).createRootUnit(
+        UnitLevel.IndividualItem,
+        "Sold Item",
+        1,
+        nextSerialHash(),
+        defaultExpiry
+      );
+      await pharmaTree.connect(manufacturer).markAsSold(2);
+      await pharmaTree.connect(admin).removeManufacturer(manufacturer.address);
+      await expect(
+        pharmaTree.connect(admin).reassignCustody(2, pharmacy.address, reasonHash)
+      ).to.be.revertedWith("Cannot reassign sold unit");
+      await pharmaTree.connect(admin).addManufacturer(manufacturer.address);
+
+      // 9. Successful reassignment by Admin
       await expect(
         pharmaTree.connect(admin).reassignCustody(1, pharmacy.address, reasonHash)
       )

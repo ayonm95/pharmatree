@@ -42,7 +42,7 @@ export interface EvaluateTiersResult {
     tier5_tamperValid: boolean;
   };
   diversionDetected: boolean;
-  tamperSealStatus: "verified" | "unverified" | "invalid" | "consumed" | "locked";
+  tamperSealStatus: "verified" | "unverified" | "invalid" | "consumed" | "locked" | "not_required";
 }
 
 /**
@@ -117,7 +117,7 @@ export function evaluateTiers(input: EvaluateTiersInput): EvaluateTiersResult {
     };
   }
 
-  // Tier 1c: Serial verification (Anti-Cloning & Forgery Prevention)
+  // Tier 1c: Serial verification (Anti-Enumeration & Forgery Prevention)
   // If unit has a registered serialHash, require correct matching serial.
   // Missing or wrong serial returns the exact same UNIT_NOT_FOUND response as a non-existent unit.
   if (
@@ -165,10 +165,10 @@ export function evaluateTiers(input: EvaluateTiersInput): EvaluateTiersResult {
           tier2_unsold: true,
           tier3_custodyMatch: true,
           tier4_integrity: true,
-          tier5_tamperValid: false,
+          tier5_tamperValid: true,
         },
         diversionDetected: false,
-        tamperSealStatus: "unverified",
+        tamperSealStatus: "not_required",
       };
     }
 

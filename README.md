@@ -3,7 +3,7 @@
 
 [![PharmaTree CI](https://github.com/ayonm95/pharmatree/actions/workflows/ci.yml/badge.svg)](https://github.com/ayonm95/pharmatree/actions/workflows/ci.yml)
 [![Live Demo](https://img.shields.io/badge/Demo-Vercel%20Staging-black?logo=vercel)](https://pharmatree.vercel.app)
-[![Solidity](https://img.shields.io/badge/Solidity-^0.8.20_(0.8.24_Cancun)-blue?logo=solidity)](https://soliditylang.org/)
+[![Solidity](https://img.shields.io/badge/Solidity-^0.8.24_(0.8.24_Cancun)-blue?logo=solidity)](https://soliditylang.org/)
 [![Ethereum](https://img.shields.io/badge/Ethereum-Sepolia%20Testnet-627EEA?logo=ethereum)](https://sepolia.etherscan.io/address/0xa51Fe74519fFdd2f167e74780Be7AAD155eEF345)
 [![Next.js](https://img.shields.io/badge/Next.js-16.4.3-black?logo=next.js)](https://nextjs.org/)
 [![License: Proprietary](https://img.shields.io/badge/License-Proprietary-red.svg)](LICENSE)
@@ -92,7 +92,7 @@ flowchart TD
 | **ERC-2771 Forwarder** | [`0x2d24b5b481d0981AE7904790e9d8BF4c162b6c8c`](https://sepolia.etherscan.io/address/0x2d24b5b481d0981AE7904790e9d8BF4c162b6c8c#code) (Verified) |
 | **Hot Relayer (0 Roles)** | [`0x335684Cfb813f673fed3f2bb87BF2778D4E96A72`](https://sepolia.etherscan.io/address/0x335684Cfb813f673fed3f2bb87BF2778D4E96A72) |
 | **Deployment Block** | `12033849` |
-| **Solidity Compiler** | `v0.8.28` (Hardhat EVM Cancun) |
+| **Solidity Compiler** | `v0.8.24+commit.e11b9ed9` (Pragma `^0.8.24`, Cancun EVM, `viaIR: true`) |
 
 ### Pre-Configured Test Wallets
 
@@ -164,18 +164,18 @@ npm run dev
 
 ---
 
-## 🧪 Testing & Validation (133 Automated Tests)
+## 🧪 Testing & Validation (140+ Automated Tests)
 
-The monorepo maintains **133 automated tests passing** across 11 test suites (80 Hardhat contract & invariant tests + 53 Vitest frontend API security & evaluator tests):
+The monorepo maintains **140+ automated tests passing** (82 Hardhat contract & invariant tests + 62 Vitest frontend API security & evaluator tests):
 
 ```bash
-# Run all smart contract, invariant, and GS1 tests (80 tests)
+# Run all smart contract, invariant, and GS1 tests (82 tests)
 npm test
 
-# Run frontend API security, tenant auth, and evaluator tests (53 tests)
+# Run frontend API security, tenant auth, and evaluator tests (62 tests)
 npm run test:frontend
 
-# Run full test suite across both packages (133 tests)
+# Run full test suite across both packages (144 tests)
 npm run test:all
 
 # Run linter and type-checking

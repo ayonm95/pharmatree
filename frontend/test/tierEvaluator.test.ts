@@ -255,4 +255,63 @@ describe("5-Tier Anti-Counterfeiting Engine (tierEvaluator)", () => {
     });
     expect(allowedRes.tamperSealStatus).toBe("verified");
   });
+
+  it("should verify authentic dispensed prescription child unit without requiring scratch seal", () => {
+    const dispensedChildUnit: EvaluateTiersInput["unit"] = {
+      ...baseUnit,
+      parentId: "1", // child of unit 1
+      rootId: "1",
+      level: 4, // individual dispensed unit
+      status: 2, // Sold
+      quantity: "1",
+      metadata: "Amoxicillin 500mg, 10 capsules dispensed",
+    };
+
+    const result = evaluateTiers({
+      unitId: 101,
+      totalUnitsOnChain: BigInt(150),
+      unit: dispensedChildUnit,
+      vendorAddress: "0x1589df48e9F04926E260Bf813c42dFb4a71893A3",
+    });
+
+    expect(result.authentic).toBe(true);
+    expect(result.tierFailed).toBeNull();
+    expect(result.reason).toBe("DISPENSED_PRESCRIPTION");
+    expect(result.tiers.tier1_registered).toBe(true);
+    expect(result.tiers.tier2_unsold).toBe(true);
+    expect(result.tiers.tier5_tamperValid).toBe(true);
+    expect(result.tamperSealStatus).toBe("not_required");
+    expect(result.message).toContain("Authentic Dispensed Prescription Medication");
+  });
+
+  it("should match serials regardless of whitespace, dashes, or casing", () => {
+    const rawSerial = "sn-2026-abcd-efgh";
+    const normalizedSerial = "SN2026ABCDEFGH";
+    const serialHash = ethers.keccak256(ethers.toUtf8Bytes(normalizedSerial));
+
+    const unitWithHash: EvaluateTiersInput["unit"] = {
+      ...baseUnit,
+      serialHash,
+    };
+
+    // User inputs lowercase with dashes
+    const resDashes = evaluateTiers({
+      unitId: 1,
+      totalUnitsOnChain: BigInt(10),
+      unit: unitWithHash,
+      serial: rawSerial,
+    });
+    expect(resDashes.authentic).toBe(true);
+    expect(resDashes.tierFailed).toBeNull();
+
+    // User inputs clean normalized
+    const resClean = evaluateTiers({
+      unitId: 1,
+      totalUnitsOnChain: BigInt(10),
+      unit: unitWithHash,
+      serial: normalizedSerial,
+    });
+    expect(resClean.authentic).toBe(true);
+    expect(resClean.tierFailed).toBeNull();
+  });
 });

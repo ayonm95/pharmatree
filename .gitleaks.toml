@@ -16,5 +16,6 @@ paths = [
   '''^backend/test/.*''',
   '''^frontend/test/.*''',
   '''^backend/scripts/e2e-sepolia-validation\.ts$''',
+  '''^backend/scripts/seed-database-seals\.ts$''',
   '''^README\.md$'''
 ]

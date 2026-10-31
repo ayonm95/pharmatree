@@ -57,8 +57,13 @@ async function main() {
   console.log("🚀 Starting PharmaTree Hardened Sepolia Deployment");
   console.log("==================================================\n");
 
-  // Step 1: Reset database / storage tables
-  await resetDatabase();
+  // Step 1: Optional database reset (strictly guarded by --reset-db flag)
+  if (process.argv.includes("--reset-db")) {
+    console.log("Explicit --reset-db flag detected. Authorizing database reset...");
+    await resetDatabase({ authorized: true });
+  } else {
+    console.log("Notice: --reset-db flag omitted; preserving existing database records (multi-contract scoping enabled).");
+  }
 
   const [deployer] = await ethers.getSigners();
   if (!deployer) throw new Error("No deployer wallet configured for Sepolia.");
@@ -262,10 +267,13 @@ async function main() {
       try {
         for (const [uId, rec] of Object.entries(sealRecords)) {
           await client.query(
-            `INSERT INTO seal_secrets (unit_id, verifier, scheme, state, failed_attempts)
-             VALUES ($1, $2, $3, $4, 0)
-             ON CONFLICT (unit_id) DO UPDATE SET verifier = EXCLUDED.verifier, scheme = EXCLUDED.scheme;`,
-            [uId, rec.verifier, rec.scheme, rec.state]
+            `INSERT INTO seal_secrets (unit_id, contract_address, verifier, scheme, state, failed_attempts)
+             VALUES ($1, $2, $3, $4, $5, 0)
+             ON CONFLICT (unit_id) DO UPDATE SET
+               contract_address = EXCLUDED.contract_address,
+               verifier = EXCLUDED.verifier,
+               scheme = EXCLUDED.scheme;`,
+            [uId, contractAddress.toLowerCase(), rec.verifier, rec.scheme, rec.state]
           );
         }
         console.log("✅ Seeded seal verifiers into Neon database.");

@@ -1115,6 +1115,8 @@ export async function withRelayerLock<T>(action: () => Promise<T>): Promise<T> {
     let client: any = null;
     try {
       client = await neonPool.connect();
+      // Enforce 15-second lock timeout and 30-second statement timeout to prevent indefinite serverless lock hanging
+      await client.query("SET lock_timeout = '15000'; SET statement_timeout = '30000';");
       await client.query("SELECT pg_advisory_lock($1);", [RELAYER_ADVISORY_LOCK_ID]);
       try {
         return await action();

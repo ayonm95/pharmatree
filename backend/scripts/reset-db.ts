@@ -5,8 +5,21 @@ import dotenv from "dotenv";
 dotenv.config({ path: path.resolve(__dirname, "../.env") });
 dotenv.config({ path: path.resolve(__dirname, "../../frontend/.env.local") });
 
-async function resetDatabase() {
+async function resetDatabase(options?: { authorized?: boolean }) {
   console.log("--- Resetting Database State ---");
+  const isAuthorized = options?.authorized || process.argv.includes("--reset-db");
+  const expectedChain = process.env.SEPOLIA_CHAIN_ID || "11155111";
+  const hasChainConfirmation = process.argv.includes(`--confirm-chain=${expectedChain}`) || options?.authorized;
+
+  if (!isAuthorized || !hasChainConfirmation) {
+    console.error(
+      "❌ Destructive action aborted! To authorize database reset, you must explicitly pass:\n" +
+      `   npx ts-node scripts/reset-db.ts --reset-db --confirm-chain=${expectedChain}\n` +
+      "This guard prevents accidental data erasure of live production databases."
+    );
+    if (require.main === module) process.exit(1);
+    return;
+  }
   const dbUrl = process.env.DATABASE_URL || process.env.POSTGRES_URL;
 
   if (dbUrl) {
