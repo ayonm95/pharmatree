@@ -10,12 +10,13 @@ import { getReadonlyProvider } from "@/lib/rpc";
 import {
   checkRateLimit,
   checkVendorDailyQuota,
+  getClientIp,
   getRateLimitHeaders,
   parseSafePositiveInt,
 } from "@/lib/rateLimit";
 import { withRelayerLock } from "@/lib/db";
 import {
-  resolveTenantFromHeaders,
+  resolveTenantFromHeadersAsync,
   isVendorAllowedForTenant,
   checkTenantDailyQuota,
 } from "@/lib/tenantAuth";
@@ -81,7 +82,7 @@ export async function POST(req: NextRequest) {
 
   // 2. Multi-Tenant Authentication & Access Policy
   const allowDemoFallback = process.env.STRICT_TENANT_AUTH !== "true";
-  const tenantResolution = resolveTenantFromHeaders(req.headers, { allowDemoFallback });
+  const tenantResolution = await resolveTenantFromHeadersAsync(req.headers, { allowDemoFallback });
 
   if (!tenantResolution.authenticated || !tenantResolution.tenant) {
     return NextResponse.json(
@@ -177,10 +178,21 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const tenantQuota = await checkTenantDailyQuota(tenant.id, tenant.dailyQuota);
+    const clientIp = getClientIp(req);
+    const tenantQuota = await checkTenantDailyQuota(tenant.id, tenant.dailyQuota, clientIp);
     rateHeaders["X-Tenant-Quota-Remaining"] = String(tenantQuota.remaining);
 
     if (!tenantQuota.allowed) {
+      if (tenant.tier === "sandbox") {
+        return NextResponse.json(
+          {
+            success: false,
+            error: "DEMO_QUOTA_EXCEEDED",
+            message: `Demo Dispensing Daily Allowance Reached for this device/IP (${tenant.dailyQuota}/${tenant.dailyQuota} demo transactions used today). This limit protects testnet relayer gas. Connect a dispensary wallet to sign directly, or try again tomorrow.`,
+          },
+          { status: 429, headers: rateHeaders }
+        );
+      }
       return NextResponse.json(
         {
           success: false,

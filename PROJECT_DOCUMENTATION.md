@@ -465,7 +465,7 @@ npm install
 # Compile contracts in backend
 npm run compile
 
-# Run complete automated test suite (97 test cases passing: 65 Hardhat + 32 Vitest)
+# Run complete automated test suite (100 test cases passing: 65 Hardhat + 35 Vitest)
 npm test
 ```
 

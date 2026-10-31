@@ -198,5 +198,46 @@ describe("Tenant Authentication & Authorization System (TDD)", () => {
       expect(q4.count).toBe(4);
       expect(q4.remaining).toBe(0);
     });
+
+    it("should partition demo sandbox quota per-IP so one user cannot DoS recruiters", async () => {
+      const sandboxTenantId = "demo-public-sandbox";
+      const ipAttacker = "198.51.100.1";
+      const ipRecruiter = "203.0.113.88";
+      const perIpLimit = 3;
+
+      // Attacker exhausts their 3 demo transactions
+      for (let i = 0; i < perIpLimit; i++) {
+        const res = await checkTenantDailyQuota(sandboxTenantId, perIpLimit, ipAttacker);
+        expect(res.allowed).toBe(true);
+      }
+      const attackerExhausted = await checkTenantDailyQuota(sandboxTenantId, perIpLimit, ipAttacker);
+      expect(attackerExhausted.allowed).toBe(false);
+      expect(attackerExhausted.remaining).toBe(0);
+
+      // Recruiter visits from a different IP and still gets their full allowance
+      const recruiterFirstCall = await checkTenantDailyQuota(sandboxTenantId, perIpLimit, ipRecruiter);
+      expect(recruiterFirstCall.allowed).toBe(true);
+      expect(recruiterFirstCall.count).toBe(1);
+      expect(recruiterFirstCall.remaining).toBe(2);
+    });
+  });
+
+  describe("Anti-Replay Nonce Verification for Administrative Resets", () => {
+    it("should consume fresh nonce once and reject replays within expiration window", async () => {
+      const { consumeResetNonce, resetResetNoncesMemory } = await import("../src/lib/tenantAuth");
+      resetResetNoncesMemory();
+
+      const unitId = 42;
+      const nonce = "nonce-uuid-test-999";
+
+      // First use succeeds
+      const first = await consumeResetNonce(nonce, unitId);
+      expect(first.success).toBe(true);
+
+      // Replay with identical nonce fails immediately
+      const replay = await consumeResetNonce(nonce, unitId);
+      expect(replay.success).toBe(false);
+      expect(replay.error).toBe("NONCE_ALREADY_USED");
+    });
   });
 });

@@ -1,5 +1,11 @@
 import crypto from "crypto";
-import { checkAndIncrementTenantQuotaDb, resetInMemoryTenantQuotas } from "./db";
+import {
+  checkAndIncrementTenantQuotaDb,
+  resetInMemoryTenantQuotas,
+  consumeResetNonceDb,
+  resetInMemoryResetNonces,
+  getDurableTenantByApiKeyHash,
+} from "./db";
 
 export type TenantTier = "sandbox" | "starter" | "enterprise";
 export type TenantStatus = "active" | "suspended";
@@ -190,13 +196,66 @@ export function isVendorAllowedForTenant(tenant: TenantRecord, vendorAddress: st
 }
 
 /**
- * Checks and increments daily quota for a tenant
+ * Resolve tenant from request headers asynchronously (with durable PostgreSQL lookup)
+ * Supports `x-tenant-key` header and `authorization: Bearer <key>`
+ */
+export async function resolveTenantFromHeadersAsync(
+  headers: Headers,
+  options: { allowDemoFallback?: boolean } = { allowDemoFallback: true }
+): Promise<TenantResolutionResult> {
+  const syncResult = resolveTenantFromHeaders(headers, options);
+  if (syncResult.authenticated || syncResult.error !== "INVALID_TENANT_KEY") {
+    return syncResult;
+  }
+
+  // Attempt durable database lookup before concluding invalid
+  let extractedKey: string | null = null;
+  const headerKey = headers.get("x-tenant-key");
+  if (headerKey && headerKey.trim()) extractedKey = headerKey.trim();
+  if (!extractedKey) {
+    const authHeader = headers.get("authorization");
+    if (authHeader && authHeader.startsWith("Bearer ")) extractedKey = authHeader.substring(7).trim();
+  }
+
+  if (extractedKey) {
+    const hash = hashApiKey(extractedKey);
+    const durableTenant = await getDurableTenantByApiKeyHash(hash);
+    if (durableTenant) {
+      registerTenantInMemory(durableTenant);
+      if (durableTenant.status === "suspended") {
+        return {
+          authenticated: false,
+          error: "TENANT_SUSPENDED",
+          message: `Tenant account '${durableTenant.name}' has been suspended. Please contact platform operations.`,
+        };
+      }
+      return { authenticated: true, tenant: durableTenant };
+    }
+  }
+
+  return syncResult;
+}
+
+/**
+ * Checks and increments daily quota for a tenant.
+ * When clientIp is provided (for demo sandbox), limits are partitioned per-IP.
  */
 export async function checkTenantDailyQuota(
   tenantId: string,
-  limit: number
+  limit: number,
+  clientIp?: string
 ): Promise<{ allowed: boolean; count: number; remaining: number }> {
-  return checkAndIncrementTenantQuotaDb(tenantId, limit);
+  return checkAndIncrementTenantQuotaDb(tenantId, limit, clientIp);
+}
+
+/**
+ * Atomically consumes a single-use administrative reset nonce to prevent signature replay attacks
+ */
+export async function consumeResetNonce(
+  nonce: string,
+  unitId: number
+): Promise<{ success: boolean; error?: string }> {
+  return consumeResetNonceDb(nonce, unitId);
 }
 
 /**
@@ -207,4 +266,8 @@ export function resetTenantQuotaMemory(): void {
   for (const k of Object.keys(inMemoryTenants)) {
     delete inMemoryTenants[k];
   }
+}
+
+export function resetResetNoncesMemory(): void {
+  resetInMemoryResetNonces();
 }

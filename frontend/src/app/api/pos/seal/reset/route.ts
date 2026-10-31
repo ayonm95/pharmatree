@@ -13,6 +13,7 @@ import {
 } from "@/lib/rateLimit";
 import { resetSealLock } from "@/lib/sealVerifier";
 import { saveUnitEvent } from "@/lib/db";
+import { consumeResetNonce } from "@/lib/tenantAuth";
 
 export async function POST(req: NextRequest) {
   const rateLimit = checkRateLimit(req, {
@@ -34,15 +35,16 @@ export async function POST(req: NextRequest) {
     const unitId = parseSafePositiveInt(body.unitId);
     const callerAddress = typeof body.callerAddress === "string" ? body.callerAddress.trim() : "";
     const signature = typeof body.signature === "string" ? body.signature.trim() : "";
+    const nonce = typeof body.nonce === "string" ? body.nonce.trim() : "";
     const timestamp = body.timestamp ? Number(body.timestamp) : Date.now();
     const clientIdentifier = typeof body.clientIdentifier === "string" ? body.clientIdentifier.trim() : undefined;
 
-    if (!unitId || !isValidEthAddress(callerAddress) || !signature) {
+    if (!unitId || !isValidEthAddress(callerAddress) || !signature || !nonce) {
       return NextResponse.json(
         {
           success: false,
           error: "INVALID_PARAMETERS",
-          message: "Unit ID, valid Ethereum caller address, and cryptographic signature are required.",
+          message: "Unit ID, valid Ethereum caller address, cryptographic signature, and single-use nonce are required.",
         },
         { status: 400, headers: rateHeaders }
       );
@@ -61,8 +63,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Verify cryptographic signature
-    const challengeMessage = `Reset Seal Lockout for Unit #${unitId} Timestamp: ${timestamp}`;
+    // Verify cryptographic signature binding unitId, explicit action, single-use nonce and timestamp
+    const challengeMessage = `Reset Seal Lockout for Unit #${unitId} Action: RESET_SEAL Nonce: ${nonce} Timestamp: ${timestamp}`;
     let recovered = "";
     try {
       recovered = ethers.verifyMessage(challengeMessage, signature).toLowerCase();
@@ -81,6 +83,19 @@ export async function POST(req: NextRequest) {
           message: `Recovered signer (${recovered}) does not match declared caller address (${callerAddress}).`,
         },
         { status: 403, headers: rateHeaders }
+      );
+    }
+
+    // Atomically consume single-use nonce to prevent replay attacks inside the 10-minute window
+    const nonceResult = await consumeResetNonce(nonce, unitId);
+    if (!nonceResult.success) {
+      return NextResponse.json(
+        {
+          success: false,
+          error: nonceResult.error || "REPLAYED_SIGNATURE",
+          message: "This administrative reset signature or nonce has already been consumed. Please generate a fresh nonce.",
+        },
+        { status: 409, headers: rateHeaders }
       );
     }
 

@@ -226,6 +226,24 @@ export async function initDbSchema(): Promise<void> {
         updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
       );
 
+      CREATE TABLE IF NOT EXISTS tenants (
+        id VARCHAR(64) PRIMARY KEY,
+        name VARCHAR(128) NOT NULL,
+        api_key_hash VARCHAR(64) NOT NULL,
+        tier VARCHAR(32) NOT NULL DEFAULT 'starter',
+        daily_quota INTEGER NOT NULL DEFAULT 100,
+        allowed_vendors TEXT[] DEFAULT ARRAY['*']::TEXT[],
+        status VARCHAR(32) NOT NULL DEFAULT 'active',
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+
+      CREATE TABLE IF NOT EXISTS used_reset_nonces (
+        nonce VARCHAR(128) PRIMARY KEY,
+        unit_id VARCHAR(64) NOT NULL,
+        consumed_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+
       -- Ensure multi-contract scoping columns exist on existing deployments
       ALTER TABLE units ADD COLUMN IF NOT EXISTS contract_address VARCHAR(42) DEFAULT '0xbd245c7f7c8bf4a8ec016e8c370d3e6931bead72';
       ALTER TABLE unit_events ADD COLUMN IF NOT EXISTS contract_address VARCHAR(42) DEFAULT '0xbd245c7f7c8bf4a8ec016e8c370d3e6931bead72';
@@ -1230,16 +1248,21 @@ export async function checkAndIncrementVendorQuotaDb(
   };
 }
 
+const inMemoryUsedResetNonces = new Set<string>();
+
 /**
- * Checks and increments the daily transaction/gas quota for an authenticated SaaS tenant
+ * Checks and increments the daily transaction/gas quota for an authenticated SaaS tenant.
+ * When clientIp is provided (such as for the demo sandbox), partitions quota per-IP so single users cannot DoS others.
  * Supported by Neon PostgreSQL table `tenant_daily_quotas` with atomic ON CONFLICT DO UPDATE
  */
 export async function checkAndIncrementTenantQuotaDb(
   tenantId: string,
-  limit = 50
+  limit = 50,
+  clientIp?: string
 ): Promise<{ allowed: boolean; count: number; remaining: number }> {
   const cleanTenant = tenantId.toLowerCase().trim();
-  const dayKey = `tenant-daily:${cleanTenant}:${new Date().toISOString().slice(0, 10)}`;
+  const ipSuffix = clientIp ? `:${hashClientIp(clientIp).slice(0, 16)}` : "";
+  const dayKey = `tenant-daily:${cleanTenant}${ipSuffix}:${new Date().toISOString().slice(0, 10)}`;
 
   if (neonPool) {
     await initDbSchema();
@@ -1274,10 +1297,85 @@ export async function checkAndIncrementTenantQuotaDb(
 }
 
 /**
- * Reset in-memory tenant quotas (used in tests)
+ * Atomically consumes a single-use administrative reset nonce to prevent signature replay attacks
+ */
+export async function consumeResetNonceDb(
+  nonce: string,
+  unitId: number
+): Promise<{ success: boolean; error?: string }> {
+  if (!nonce || typeof nonce !== "string" || nonce.trim().length === 0) {
+    return { success: false, error: "MISSING_NONCE" };
+  }
+  const cleanNonce = nonce.trim();
+
+  if (neonPool) {
+    await initDbSchema();
+    try {
+      const res = await neonPool.query(
+        `INSERT INTO used_reset_nonces (nonce, unit_id, consumed_at)
+         VALUES ($1, $2, NOW())
+         ON CONFLICT (nonce) DO NOTHING
+         RETURNING nonce;`,
+        [cleanNonce, String(unitId)]
+      );
+      if (res.rows.length === 0) {
+        return { success: false, error: "NONCE_ALREADY_USED" };
+      }
+      inMemoryUsedResetNonces.add(cleanNonce);
+      return { success: true };
+    } catch (err) {
+      console.warn("[Database] Postgres consumeResetNonceDb failed, falling back to memory:", err);
+    }
+  }
+
+  if (inMemoryUsedResetNonces.has(cleanNonce)) {
+    return { success: false, error: "NONCE_ALREADY_USED" };
+  }
+  inMemoryUsedResetNonces.add(cleanNonce);
+  return { success: true };
+}
+
+/**
+ * Retrieve active tenant from Neon PostgreSQL by SHA-256 API key hash (persists across serverless cold starts)
+ */
+export async function getDurableTenantByApiKeyHash(apiKeyHash: string): Promise<any | null> {
+  if (!neonPool || !apiKeyHash) return null;
+  try {
+    await initDbSchema();
+    const res = await neonPool.query(
+      `SELECT id, name, api_key_hash, tier, daily_quota, allowed_vendors, status
+       FROM tenants
+       WHERE api_key_hash = $1 AND status = 'active'
+       LIMIT 1;`,
+      [apiKeyHash]
+    );
+    if (res.rows.length > 0) {
+      const r = res.rows[0];
+      return {
+        id: r.id,
+        name: r.name,
+        apiKeyHash: r.api_key_hash,
+        tier: r.tier,
+        dailyQuota: Number(r.daily_quota),
+        allowedVendors: r.allowed_vendors || ["*"],
+        status: r.status,
+      };
+    }
+  } catch (err) {
+    console.warn("[Database] Postgres getDurableTenantByApiKeyHash error:", err);
+  }
+  return null;
+}
+
+/**
+ * Reset in-memory tenant quotas and reset nonces (used in tests)
  */
 export function resetInMemoryTenantQuotas(): void {
   for (const k of Object.keys(inMemoryTenantDailyQuotas)) {
     delete inMemoryTenantDailyQuotas[k];
   }
+}
+
+export function resetInMemoryResetNonces(): void {
+  inMemoryUsedResetNonces.clear();
 }

@@ -98,5 +98,24 @@ describe("POS Sell API Security Policies", () => {
       expect(q3.allowed).toBe(false);
       expect(q3.remaining).toBe(0);
     });
+
+    it("should partition demo sandbox quota per-IP and preserve allowance for new visitors", async () => {
+      const sandboxTenantId = "demo-public-sandbox";
+      const ip1 = "192.0.2.1";
+      const ip2 = "198.51.100.99";
+      const limit = 3;
+
+      // IP 1 uses up allowance
+      await checkTenantDailyQuota(sandboxTenantId, limit, ip1);
+      await checkTenantDailyQuota(sandboxTenantId, limit, ip1);
+      await checkTenantDailyQuota(sandboxTenantId, limit, ip1);
+      const ip1Blocked = await checkTenantDailyQuota(sandboxTenantId, limit, ip1);
+      expect(ip1Blocked.allowed).toBe(false);
+
+      // IP 2 (recruiter) is unaffected
+      const ip2Allowed = await checkTenantDailyQuota(sandboxTenantId, limit, ip2);
+      expect(ip2Allowed.allowed).toBe(true);
+      expect(ip2Allowed.remaining).toBe(2);
+    });
   });
 });

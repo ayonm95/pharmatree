@@ -176,7 +176,7 @@ export default function VendorPosPage() {
       setIsVerifying(true);
 
       try {
-        const tenantKey = typeof window !== "undefined" ? localStorage.getItem("pharma_tenant_key") : null;
+        const tenantKey = typeof window !== "undefined" ? sessionStorage.getItem("pharma_tenant_key") : null;
         const reqHeaders: Record<string, string> = { "Content-Type": "application/json" };
         if (tenantKey) reqHeaders["X-Tenant-Key"] = tenantKey;
 
@@ -345,7 +345,7 @@ export default function VendorPosPage() {
     setIsDispensing(true);
 
     try {
-      const tenantKey = typeof window !== "undefined" ? localStorage.getItem("pharma_tenant_key") : null;
+      const tenantKey = typeof window !== "undefined" ? sessionStorage.getItem("pharma_tenant_key") : null;
       const reqHeaders: Record<string, string> = { "Content-Type": "application/json" };
       if (tenantKey) reqHeaders["X-Tenant-Key"] = tenantKey;
 
@@ -433,7 +433,11 @@ export default function VendorPosPage() {
           remainingQty: totalAvail - dispenseQty,
         });
       } else {
-        alert(data.message || "Failed to dispense unit.");
+        if (data.error === "DEMO_QUOTA_EXCEEDED") {
+          alert(`ℹ️ Demo Dispensing Allowance Reached\n\n${data.message}`);
+        } else {
+          alert(data.message || "Failed to dispense unit.");
+        }
         if (soundEnabled) playSirenAlarm();
       }
     } catch (err: any) {
@@ -493,7 +497,7 @@ export default function VendorPosPage() {
   async function handleVerifyTamperPin() {
     if (!currentVerification?.unit || !scratchSecret.trim()) return;
     try {
-      const tenantKey = typeof window !== "undefined" ? localStorage.getItem("pharma_tenant_key") : null;
+      const tenantKey = typeof window !== "undefined" ? sessionStorage.getItem("pharma_tenant_key") : null;
       const reqHeaders: Record<string, string> = { "Content-Type": "application/json" };
       if (tenantKey) reqHeaders["X-Tenant-Key"] = tenantKey;
 
